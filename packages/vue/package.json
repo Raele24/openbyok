@@ -1,0 +1,23 @@
+﻿{
+  "name": "openbyok/vue",
+  "version": "1.1.0",
+  "description": "Vue 3 Composition API adapter for openbyok/core and openbyok/ui.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "byok",
+    "vue",
+    "composable",
+    "ai",
+    "vault"
+  ],
+  "author": "Raele24",
+  "license": "MIT"
+}

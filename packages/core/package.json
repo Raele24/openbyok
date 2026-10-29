@@ -1,0 +1,27 @@
+﻿{
+  "name": "openbyok/core",
+  "version": "1.1.0",
+  "description": "Zero-dependency core engine for BYOK AI providers, resilience failover, and client-side WebCrypto vaults.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "byok",
+    "ai",
+    "vault",
+    "webcrypto",
+    "failover",
+    "gemini",
+    "openai",
+    "claude",
+    "ollama"
+  ],
+  "author": "Raele24",
+  "license": "MIT"
+}

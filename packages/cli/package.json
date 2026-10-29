@@ -1,0 +1,24 @@
+﻿{
+  "name": "openbyok/cli",
+  "version": "1.1.0",
+  "description": "Node.js and CLI credential vault with POSIX 0600 permissions, per-provider key maps, masked terminal input, and environment variable precedence.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "byok",
+    "cli",
+    "node",
+    "vault",
+    "posix",
+    "credentials"
+  ],
+  "author": "Raele24",
+  "license": "MIT"
+}

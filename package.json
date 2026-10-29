@@ -1,0 +1,106 @@
+{
+  "name": "openbyok",
+  "version": "1.1.0",
+  "type": "module",
+  "description": "Zero-dependency Bring Your Own Key (BYOK) AI toolkit for Browser, Desktop, Mobile, CLI, and Python applications.",
+  "main": "./dist/core/src/index.js",
+  "types": "./dist/core/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/core/src/index.d.ts",
+      "default": "./dist/core/src/index.js"
+    },
+    "./core": {
+      "types": "./dist/core/src/index.d.ts",
+      "default": "./dist/core/src/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli/src/index.d.ts",
+      "default": "./dist/cli/src/index.js"
+    },
+    "./ui": {
+      "types": "./dist/ui/src/index.d.ts",
+      "default": "./dist/ui/src/index.js"
+    },
+    "./angular": {
+      "types": "./dist/angular/src/index.d.ts",
+      "default": "./dist/angular/src/index.js"
+    },
+    "./react": {
+      "types": "./dist/react/src/index.d.ts",
+      "default": "./dist/react/src/index.js"
+    },
+    "./vue": {
+      "types": "./dist/vue/src/index.d.ts",
+      "default": "./dist/vue/src/index.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "core": [
+        "dist/core/src/index.d.ts"
+      ],
+      "cli": [
+        "dist/cli/src/index.d.ts"
+      ],
+      "ui": [
+        "dist/ui/src/index.d.ts"
+      ],
+      "angular": [
+        "dist/angular/src/index.d.ts"
+      ],
+      "react": [
+        "dist/react/src/index.d.ts"
+      ],
+      "vue": [
+        "dist/vue/src/index.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Raele24/openbyok.git"
+  },
+  "homepage": "https://github.com/Raele24/openbyok#readme",
+  "bugs": {
+    "url": "https://github.com/Raele24/openbyok/issues"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "keywords": [
+    "openbyok",
+    "byok",
+    "ai",
+    "llm",
+    "vault",
+    "webcrypto",
+    "passphrase",
+    "gemini",
+    "openai",
+    "claude",
+    "ollama",
+    "streaming",
+    "failover",
+    "angular",
+    "react",
+    "vue",
+    "python"
+  ],
+  "author": "Raele24",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,23 @@
+﻿{
+  "name": "openbyok/ui",
+  "version": "1.1.0",
+  "description": "Headless state controller and CSS-variable themeable <byok-settings> Web Component for BYOK AI applications.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "byok",
+    "ui",
+    "web-component",
+    "headless",
+    "themeable"
+  ],
+  "author": "Raele24",
+  "license": "MIT"
+}

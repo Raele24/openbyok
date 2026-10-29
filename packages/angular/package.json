@@ -1,0 +1,22 @@
+﻿{
+  "name": "openbyok/angular",
+  "version": "1.1.0",
+  "description": "Reactive Angular Signals adapter and helper utilities for openbyok/core.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "byok",
+    "angular",
+    "signals",
+    "vault"
+  ],
+  "author": "Raele24",
+  "license": "MIT"
+}

@@ -1,0 +1,23 @@
+﻿{
+  "name": "openbyok/react",
+  "version": "1.1.0",
+  "description": "Zero-coupling React hooks adapter for openbyok/core and openbyok/ui.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "byok",
+    "react",
+    "hooks",
+    "ai",
+    "vault"
+  ],
+  "author": "Raele24",
+  "license": "MIT"
+}

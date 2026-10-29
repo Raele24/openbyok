@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "rootDir": "./packages",
+    "outDir": "./dist"
+  },
+  "include": [
+    "packages/core/src/**/*",
+    "packages/cli/src/**/*",
+    "packages/ui/src/**/*",
+    "packages/angular/src/**/*",
+    "packages/react/src/**/*",
+    "packages/vue/src/**/*"
+  ]
+}
+

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+packages/*/dist/
+packages/python/dist/
+packages/python/build/
+packages/python/*.egg-info/
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+*.tgz

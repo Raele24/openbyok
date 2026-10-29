@@ -1,6 +1,6 @@
 {
   "name": "openbyok",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "type": "module",
   "description": "Zero-dependency Bring Your Own Key (BYOK) AI toolkit for Browser, Desktop, Mobile, and Node.js CLI applications.",
   "main": "./dist/core/src/index.js",

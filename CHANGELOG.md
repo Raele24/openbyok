@@ -2,6 +2,24 @@
 
 All notable changes to `openbyok` are documented in this file.
 
+## [1.2.0] - 2026-10-29
+
+### Added
+- **Unified Live Model Auto-Discovery (`listModels`)**: Implemented `listModels(config)` across all built-in and OpenAI-compatible providers (`gemini`, `openai`, `claude`, `ollama`), exposed `client.listModels()`, and added automatic background model discovery (`availableModels`, `refreshModels()`) in `ByokHeadlessController`, `<byok-settings>`, `openbyok/angular`, `openbyok/react`, and `openbyok/vue`.
+- **Configurable Model Filtering (`modelFilter`)**: Added optional `modelFilter?: (modelId: string) => boolean` in `ProviderConfig`, `OpenAICompatibleOptions`, and `ByokClientOptions.providerModelFilters`.
+- **Native Multi-Turn Chat (`messages[]`)**: Added `ChatMessage` and `messages?: ChatMessage[]` support in `GenerationRequest` with per-turn multimodal images while maintaining full backward compatibility with `userPrompt`.
+- **Native `AbortSignal` Cancellation (`request.signal`)**: Added `signal?: AbortSignal` to `GenerationRequest`, propagating cancellation through `ResilienceExecutor` and `readStreamLines()` with immediate `reader.cancel()` and no unintended fallback cascade on user abort.
+- **State & Credential Hydration (`client.hydrate()`)**: Added `client.hydrate()` and `controller.hydrate()` to restore persisted `vaultMode`, `activeProvider`, custom models/endpoints, and encrypted keys across browser reloads.
+- **Lifecycle Telemetry (`client.onEvent`) & Exact Upstream Token Tracking**: Added `ByokLifecycleEvent` hooks (`retry`, `model-failover`, `provider-failover`, `usage-recorded`) and exact API token counting from `usage` / `usageMetadata` responses.
+- **Runtime Budget Policy Updates (`setBudgetPolicy`)**: Added `client.setBudgetPolicy(policy)` and `client.getBudgetPolicy()`.
+
+### Fixed
+- **Multimodal Streaming (`generateStream`)**: Shared message builders across `executeGeneration` and `generateStream` so `request.images` are included during streaming on OpenAI, Claude, and Ollama.
+- **Resilient Streaming Handshake**: Wrapped `generateStream()` initial HTTP handshake in `ResilienceExecutor.executeWithFailover()` across all providers for per-model timeouts, `503`/`429` retry backoff, and candidate model rotation.
+- **Aggregated Failover Error Chain**: Fixed `lastError` overwriting primary provider errors during fallback cascades (`All providers failed: [primary: ...] -> [fallback: ...]`).
+- **UI Controller to Client Model/Endpoint Sync**: Synchronized `setCustomModel()` and `setCustomEndpoint()` directly with `ByokClient` (`setProviderModel`, `setProviderEndpoint`).
+- **Tolerant Structured JSON Parsing (`parseStructuredJson`)**: Unified JSON extraction across all providers to tolerate markdown fences and surrounding conversational text in `generateObject<T>()`.
+
 ## [1.1.1] - 2026-10-29
 
 ### Security & Performance

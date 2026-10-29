@@ -1,6 +1,25 @@
 # openbyok
 
+[![npm version](https://img.shields.io/npm/v/openbyok.svg)](https://www.npmjs.com/package/openbyok)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](https://www.npmjs.com/package/openbyok)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
+
 Zero-dependency TypeScript toolkit for Bring Your Own Key (BYOK) and local offline AI applications across Web Browsers, Desktop, Mobile, and Node.js CLI environments.
+
+---
+
+## Why openbyok?
+
+Client-side and CLI AI applications need a secure, unified way to manage user-supplied API keys, handle model rate limits, and switch between cloud providers and local models without routing secrets through intermediary servers.
+
+`openbyok` provides:
+- **4 Vault Storage Tiers**: Volatile RAM (`session`), WebCrypto AES-GCM-256 (`encrypted`), PIN-Locked AES-GCM-256 with brute-force protection (`passphrase`), and POSIX `0600` owner-only CLI files (`posix-file`).
+- **Multi-Provider & OpenAI-Compatible Factory**: Built-in support for Google Gemini, OpenAI, Anthropic Claude, and local Ollama, plus 1-step registration for Groq, OpenRouter, DeepSeek, Mistral, Together AI, LM Studio, and vLLM.
+- **2-Level Automatic Failover**: Per-model retry/failover (`ResilienceExecutor`) AND cross-provider cascade (`fallbackProviders`) with session working-model memory.
+- **Universal Streaming (`generateStream`)**: Single `AsyncGenerator<string>` interface across Gemini SSE, OpenAI SSE, Claude SSE, and Ollama NDJSON.
+- **Session Cost & Request Budget Guard (`UsageTracker`)**: Real-time token/USD estimation and concurrency-safe `BudgetPolicy` limits (`BudgetExceededError`).
+- **Drop-In UI & Framework Wrappers**: Themeable `<byok-settings>` Web Component, Headless Controller, Angular Signals (`openbyok/angular`), React Hooks (`openbyok/react`), and Vue 3 Composables (`openbyok/vue`).
 
 ---
 
@@ -12,57 +31,29 @@ npm install openbyok
 
 ---
 
-## Core Capabilities
-
-1. **Multi-Provider Support & Custom Providers**:
-   - Built-in support for Google Gemini (`gemini`), OpenAI (`openai`), Anthropic Claude (`claude`), and local offline Ollama (`ollama`).
-   - Built-in `createOpenAICompatibleProvider()` factory to register Groq, OpenRouter, DeepSeek, Mistral, Together AI, LM Studio, or vLLM with a simple configuration object.
-   - Open `AIProvider` interface for custom endpoints.
-2. **Per-Model & Cross-Provider Failover (`ResilienceExecutor` & `fallbackProviders`)**:
-   - Per-model timeouts (`AbortController`), retry counts with exponential backoff, automatic model discovery, session working-model caching, and automatic API key redaction in error messages.
-   - **Cross-Provider Cascade**: Configure `fallbackProviders: ['openai', 'ollama']` so if the primary provider hits a rate limit (`429`) or outage (`503`), `ByokClient` automatically cascades to the next configured provider.
-3. **Universal Real-Time Streaming (`generateStream`)**:
-   - Unified `AsyncGenerator<string>` streaming across Gemini SSE, OpenAI SSE, Claude SSE, and Ollama NDJSON.
-4. **Session Token & Cost Budget Guard (`UsageTracker` & `BudgetPolicy`)**:
-   - Concurrency-safe tracking of per-provider requests, estimated input/output tokens, and USD cost (`getUsageMetrics()`).
-   - Enforces `maxRequestsPerSession`, `maxEstimatedTokensPerSession`, and `maxCostUsdPerSession` via `BudgetExceededError`.
-5. **Pluggable Credential Vaults (`VaultAdapter`)**:
-   - **Session Memory Vault (`MemoryVaultAdapter` - `session`)**: Stores keys exclusively in volatile JavaScript RAM. Zero disk writes.
-   - **Encrypted Persistent Vault (`WebCryptoVaultAdapter` - `encrypted`)**: Encrypts keys at rest in browser storage using authenticated `crypto.subtle` AES-GCM-256 and PBKDF2 (100,000 SHA-256 iterations) with in-memory `CryptoKey` caching and strict refusal of plaintext storage fallback.
-   - **Passphrase / PIN Locked Vault (`PassphraseVaultAdapter` - `passphrase`)**: Derives the AES-GCM-256 key strictly from a user-entered PIN/passphrase (`unlock(pin)` / `lock()`) verified against an encrypted canary with built-in brute-force lockout protection.
-   - **Node / CLI Vault (`PosixFileVaultAdapter` - `posix-file`)**: Stores isolated keys per provider (`keys: { gemini, openai, claude, ollama }`) in `~/.<app>/config.json` with strict `0600` file permissions and `0700` directory permissions, enforcing `CLI Flag > Environment Variable > Stored Config` precedence.
-6. **Adaptive UI & Multi-Framework Subpath Exports**:
-   - **Headless Controller (`openbyok/ui`)**: Framework-agnostic reactive state for custom UIs.
-   - **Themeable Web Component (`<byok-settings>`)**: Drop-in HTML element customizable via CSS Custom Properties (`--byok-*`) or unstyled CSS class injection (Tailwind, Bootstrap).
-   - **Framework Wrappers**: `openbyok/angular` (Signals), `openbyok/react` (Hooks), and `openbyok/vue` (Vue 3 Composables).
-7. **Multilingual Localization (i18n)**:
-   - Built-in translations for English (`en`), Italian (`it`), French (`fr`), Spanish (`es`), and German (`de`), plus `ByokLocalizer.registerLocale()` for custom languages.
-
----
-
 ## Subpath Exports
 
-| Import Path | Environment | Description |
+| Import Path | Target Environment | Included Modules |
 | :--- | :--- | :--- |
-| `openbyok` | Browser / Node | Core `ByokClient`, `createByok`, 4 built-in providers + OpenAI-compatible factory, Cross-Provider Failover, Universal Streaming, Budget Guard, `MemoryVaultAdapter`, `WebCryptoVaultAdapter`, `PassphraseVaultAdapter`, and `ByokLocalizer`. |
-| `openbyok/cli` | Node.js CLI | Terminal credential manager (`PosixFileVaultAdapter` with `0600` permissions, multi-provider key map, `promptMaskedInput`, `redactApiKey`). |
-| `openbyok/ui` | Web Components | Framework-agnostic `ByokHeadlessController` and themeable `<byok-settings>` Custom Element. |
-| `openbyok/angular` | Angular 16+ | Reactive Angular Signals integration (`createByokSignalStore`). |
-| `openbyok/react` | React 17/18/19 | Reactive React Hook factory (`createByokReactHook`). |
-| `openbyok/vue` | Vue 3 / Nuxt | Reactive Vue 3 Composable factory (`createByokVueComposable`). |
+| `openbyok` | Browser / Node.js | `ByokClient`, `createByok`, `GeminiProvider`, `OpenAIProvider`, `ClaudeProvider`, `OllamaProvider`, `createOpenAICompatibleProvider`, `MemoryVaultAdapter`, `WebCryptoVaultAdapter`, `PassphraseVaultAdapter`, `ResilienceExecutor`, `UsageTracker`, `ByokLocalizer` |
+| `openbyok/cli` | Node.js CLI | `PosixFileVaultAdapter` (`0600` file / `0700` dir permissions), `promptMaskedInput`, `redactApiKey`, `warnIfCliKeyExposed` |
+| `openbyok/ui` | Web Components / DOM | `ByokHeadlessController`, `registerByokSettingsElement` (`<byok-settings>`), `escapeHtml` |
+| `openbyok/angular` | Angular 16+ | `createByokSignalStore` (Angular Signals bridge) |
+| `openbyok/react` | React 17 / 18 / 19 | `createByokReactHook` (`useByok` hook factory) |
+| `openbyok/vue` | Vue 3 / Nuxt | `createByokVueComposable` (`useByok` composable factory) |
 
 ---
 
 ## Quick Start
 
-### 1. Cross-Provider Failover, Budget Guard & Streaming (`openbyok`)
+### 1. Client Initialization, Cross-Provider Failover & Streaming
 
 ```typescript
 import { createByok } from 'openbyok';
 
 const client = createByok({
   defaultProvider: 'gemini',
-  fallbackProviders: ['openai', 'ollama'],
+  fallbackProviders: ['openai', 'ollama'], // Auto-cascades on 429/503 outage
   defaultVaultMode: 'session',
   budgetPolicy: {
     maxRequestsPerSession: 50,
@@ -70,41 +61,99 @@ const client = createByok({
   },
 });
 
+await client.vault.setKey('gemini', 'AIzaSy...');
+
+// Stream text chunks in real time
 for await (const chunk of client.generateStream({
-  systemPrompt: 'Be concise.',
-  userPrompt: 'Explain AES-GCM-256 encryption.',
+  systemPrompt: 'Be concise and factual.',
+  userPrompt: 'Explain authenticated AES-GCM-256 encryption.',
 })) {
   process.stdout.write(chunk);
 }
 
-console.log('Session usage:', client.getUsageMetrics());
+console.log('Session metrics:', client.getUsageMetrics());
 ```
 
-### 2. User Passphrase / PIN Vault (`PassphraseVaultAdapter`)
+### 2. PIN / Passphrase Locked Vault (`PassphraseVaultAdapter`)
+
+Encrypts API keys in browser storage using a key derived from the user's PIN via 100,000 PBKDF2-SHA256 iterations. Includes canary verification and brute-force lockout cooldown:
 
 ```typescript
 await client.vault.setMode('passphrase');
-const unlocked = await client.passphraseVault.unlock('my-secret-pin-4829');
+
+const unlocked = await client.passphraseVault.unlock('4829');
 if (unlocked) {
   await client.vault.setKey('openai', 'sk-proj-...');
 }
-// Lock when idle (wipes passphrase and derived CryptoKey from RAM)
+
+// Wipe passphrase and derived CryptoKey from RAM when idle
 client.passphraseVault.lock();
+```
+
+### 3. Registering Groq, OpenRouter, or DeepSeek
+
+```typescript
+import { createByok, createOpenAICompatibleProvider } from 'openbyok';
+
+const groq = createOpenAICompatibleProvider({
+  id: 'groq',
+  name: 'Groq Cloud',
+  defaultBaseUrl: 'https://api.groq.com/openai/v1',
+  defaultModel: 'llama-3.2-90b-vision-preview',
+});
+
+const client = createByok({
+  customProviders: [groq],
+  defaultProvider: 'groq',
+});
+```
+
+### 4. Node.js CLI Credential Vault (`openbyok/cli`)
+
+Enforces `0700` directory and `0600` file permissions on `~/.<app>/config.json`, isolates keys per provider, and resolves credentials in strict `CLI Flag > Environment Variable > Stored Config` order:
+
+```typescript
+import { PosixFileVaultAdapter, promptMaskedInput, redactApiKey } from 'openbyok/cli';
+
+const cliVault = new PosixFileVaultAdapter({ configDirName: '.my-cli' });
+
+const secret = await promptMaskedInput('Enter OpenAI API Key: ');
+await cliVault.setSecret('openai', secret);
+
+const resolved = cliVault.resolveKey('openai', process.env.CLI_FLAG_KEY);
+console.log('Active key:', redactApiKey(resolved));
 ```
 
 ---
 
-## Documentation Index
+## Security & Quality Assurance
 
-- [Architecture & Design](./docs/architecture.md)
+Run the built-in 18-test security, cryptographic penetration, chaos resilience, concurrency, and fuzzing suite:
+
+```bash
+npm test
+```
+
+- **AES-GCM-256 Authentication**: Rejects bit-flipped IVs, tampered ciphertexts, and truncated envelopes.
+- **Strict No-Plaintext Policy**: Refuses to fall back to plaintext storage if `crypto.subtle` is unavailable.
+- **Error Secret Scrubbing**: Automatically redacts raw API keys (`***REDACTED***`) from upstream HTTP errors and stack traces.
+- **DOM XSS Sanitization**: Escapes all dynamic state before rendering in `<byok-settings>`.
+
+---
+
+## Documentation
+
+- [System Architecture](./docs/architecture.md)
 - [Security & Custom Vault Adapters](./docs/security-vaults.md)
 - [Adding Custom AI Providers](./docs/custom-providers.md)
 - [Resilience, Retry & Failover Policies](./docs/resilience-and-failover.md)
 - [UI Integration & Theming Guide](./docs/ui-theming.md)
-- [Multi-Framework (Angular, React, Vue) Guide](./docs/multi-framework-and-python.md)
+- [Multi-Framework Guide (Angular, React, Vue)](./docs/multi-framework-and-python.md)
+- [Security Policy](./SECURITY.md)
+- [Changelog](./CHANGELOG.md)
 
 ---
 
 ## License
 
-MIT
+MIT — Copyright (c) 2026 [Raele24](https://github.com/Raele24)

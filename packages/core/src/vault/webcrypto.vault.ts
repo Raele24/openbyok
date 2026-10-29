@@ -2,11 +2,11 @@
  * WebCrypto AES-GCM-256 Vault Adapter
  *
  * Provides authenticated AES-GCM-256 at-rest encryption for API keys in browser storage.
- * Derives a 256-bit key using PBKDF2 with 100,000 SHA-256 iterations, a 128-bit random salt,
- * origin metadata, and an optional user passphrase.
+ * Derives a non-extractable 256-bit CryptoKey using PBKDF2 with 100,000 SHA-256 iterations,
+ * a 128-bit random salt, origin metadata, and an optional user passphrase.
  */
 
-import { VaultAdapter } from '../types';
+import { VaultAdapter } from '../types.js';
 
 const ENCRYPTION_PREFIX = 'enc:v1:';
 const DEFAULT_STORAGE_PREFIX = 'byok_vault_';
@@ -31,6 +31,7 @@ export class WebCryptoVaultAdapter implements VaultAdapter {
   private saltStorageKey: string;
   private legacyKeyMap: Record<string, string>;
   private passphrase: string;
+  private derivedKeyCache = new Map<string, CryptoKey>();
 
   constructor(options: WebCryptoVaultOptions = {}) {
     this.storagePrefix = options.storagePrefix || DEFAULT_STORAGE_PREFIX;
@@ -40,10 +41,18 @@ export class WebCryptoVaultAdapter implements VaultAdapter {
   }
 
   /**
-   * Updates the passphrase used for PBKDF2 key derivation.
+   * Updates the passphrase used for PBKDF2 key derivation and clears cached CryptoKeys.
    */
   public setPassphrase(passphrase: string): void {
     this.passphrase = passphrase || 'byok_vault_v1';
+    this.derivedKeyCache.clear();
+  }
+
+  /**
+   * Wipes cached CryptoKeys from memory.
+   */
+  public clearKeyCache(): void {
+    this.derivedKeyCache.clear();
   }
 
   private resolveStorageKey(key: string): string {
@@ -75,12 +84,12 @@ export class WebCryptoVaultAdapter implements VaultAdapter {
       localStorage.removeItem(storageKey);
       return;
     }
-    try {
-      const encrypted = await this.encryptSecret(clean);
-      localStorage.setItem(storageKey, encrypted);
-    } catch {
-      localStorage.setItem(storageKey, clean);
+
+    const encrypted = await this.encryptSecret(clean);
+    if (!encrypted || !encrypted.startsWith(ENCRYPTION_PREFIX)) {
+      throw new Error('WebCrypto encryption failed: refusing to store plaintext secret.');
     }
+    localStorage.setItem(storageKey, encrypted);
   }
 
   public async deleteSecret(key: string): Promise<void> {
@@ -91,6 +100,7 @@ export class WebCryptoVaultAdapter implements VaultAdapter {
   }
 
   public async clearAll(): Promise<void> {
+    this.derivedKeyCache.clear();
     if (typeof localStorage === 'undefined') return;
     try {
       for (const legacyKey of Object.values(this.legacyKeyMap)) {
@@ -109,30 +119,41 @@ export class WebCryptoVaultAdapter implements VaultAdapter {
     } catch { }
   }
 
-  private getOrCreateSalt(): Uint8Array {
+  private getOrCreateSalt(): { bytes: Uint8Array; base64: string } {
     try {
       const existing = localStorage.getItem(this.saltStorageKey);
       if (existing) {
-        return Uint8Array.from(atob(existing), (c) => c.charCodeAt(0));
+        return {
+          bytes: Uint8Array.from(atob(existing), (c) => c.charCodeAt(0)),
+          base64: existing,
+        };
       }
     } catch { }
 
     const newSalt = crypto.getRandomValues(new Uint8Array(16));
+    const base64Salt = btoa(String.fromCharCode(...newSalt));
     try {
-      const base64Salt = btoa(String.fromCharCode(...newSalt));
       localStorage.setItem(this.saltStorageKey, base64Salt);
     } catch { }
-    return newSalt;
+    return { bytes: newSalt, base64: base64Salt };
   }
 
   private async deriveStorageKey(includeUserAgentSlice = false): Promise<CryptoKey> {
     const salt = this.getOrCreateSalt();
-    const origin = typeof window !== 'undefined' && window.location ? window.location.origin : 'local';
+    const origin =
+      typeof window !== 'undefined' && window.location ? window.location.origin : 'local';
     const uaPart =
       includeUserAgentSlice && typeof navigator !== 'undefined'
         ? `:${navigator.userAgent.slice(0, 50)}`
         : '';
     const originEntropy = `${origin}${uaPart}:${this.passphrase}`;
+    const cacheId = `${salt.base64}:${originEntropy}`;
+
+    const cached = this.derivedKeyCache.get(cacheId);
+    if (cached) {
+      return cached;
+    }
+
     const enc = new TextEncoder();
     const keyMaterial = await crypto.subtle.importKey(
       'raw',
@@ -142,10 +163,10 @@ export class WebCryptoVaultAdapter implements VaultAdapter {
       ['deriveKey']
     );
 
-    return crypto.subtle.deriveKey(
+    const derivedKey = await crypto.subtle.deriveKey(
       {
         name: 'PBKDF2',
-        salt: salt as unknown as BufferSource,
+        salt: salt.bytes as unknown as BufferSource,
         iterations: 100000,
         hash: 'SHA-256',
       },
@@ -154,10 +175,17 @@ export class WebCryptoVaultAdapter implements VaultAdapter {
       false,
       ['encrypt', 'decrypt']
     );
+
+    this.derivedKeyCache.set(cacheId, derivedKey);
+    return derivedKey;
   }
 
   public async encryptSecret(secret: string): Promise<string> {
     if (!secret || secret.trim() === '') return '';
+    if (typeof crypto === 'undefined' || !crypto.subtle) {
+      throw new Error('WebCrypto API (crypto.subtle) is unavailable in this environment.');
+    }
+
     const key = await this.deriveStorageKey(false);
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const encoded = new TextEncoder().encode(secret.trim());
@@ -181,10 +209,21 @@ export class WebCryptoVaultAdapter implements VaultAdapter {
     }
 
     const parts = payload.slice(ENCRYPTION_PREFIX.length).split(':');
-    if (parts.length !== 2) return '';
+    if (parts.length !== 2 || !parts[0] || !parts[1]) return '';
 
-    const iv = Uint8Array.from(atob(parts[0]), (c) => c.charCodeAt(0));
-    const ciphertext = Uint8Array.from(atob(parts[1]), (c) => c.charCodeAt(0));
+    let iv: Uint8Array;
+    let ciphertext: Uint8Array;
+    try {
+      iv = Uint8Array.from(atob(parts[0]), (c) => c.charCodeAt(0));
+      ciphertext = Uint8Array.from(atob(parts[1]), (c) => c.charCodeAt(0));
+    } catch {
+      return '';
+    }
+
+    // AES-GCM requires a 12-byte IV and at least a 16-byte authentication tag
+    if (iv.byteLength !== 12 || ciphertext.byteLength <= 16) {
+      return '';
+    }
 
     try {
       const key = await this.deriveStorageKey(false);

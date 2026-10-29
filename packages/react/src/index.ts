@@ -5,8 +5,8 @@
  * across React 17, 18, 19, Next.js, and Remix without peer-dependency version conflicts.
  */
 
-import { ByokClient, ByokClientOptions, ProviderId } from '../../core/src/index';
-import { ByokHeadlessController, ByokUiState } from '../../ui/src/index';
+import { ByokClient, ByokClientOptions, ProviderId } from '../../core/src/index.js';
+import { ByokHeadlessController, ByokUiState } from '../../ui/src/index.js';
 
 export interface ReactPrimitives {
   useState: <T>(initial: T | (() => T)) => [T, (next: T) => void];

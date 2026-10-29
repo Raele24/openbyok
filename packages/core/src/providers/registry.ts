@@ -1,15 +1,15 @@
-/**
+﻿/**
  * Provider Registry
  *
  * Central registry allowing dynamic registration and selection of built-in
  * and user-defined AI providers.
  */
 
-import { AIProvider, ProviderId } from '../types';
-import { GeminiProvider } from './gemini.provider';
-import { OpenAIProvider } from './openai.provider';
-import { ClaudeProvider } from './claude.provider';
-import { OllamaProvider } from './ollama.provider';
+import { AIProvider, ProviderId } from '../types.js';
+import { GeminiProvider } from './gemini.provider.js';
+import { OpenAIProvider } from './openai.provider.js';
+import { ClaudeProvider } from './claude.provider.js';
+import { OllamaProvider } from './ollama.provider.js';
 
 export class ProviderRegistry {
   private static instance: ProviderRegistry;

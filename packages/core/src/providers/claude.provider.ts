@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Anthropic Claude Provider
  *
  * Implements the AIProvider interface for Anthropic's Messages API
@@ -10,9 +10,9 @@ import {
   ConnectionTestResult,
   GenerationRequest,
   ProviderConfig,
-} from '../types';
-import { HttpStatusError, ResilienceExecutor } from '../resilience';
-import { readStreamLines } from '../stream.util';
+} from '../types.js';
+import { HttpStatusError, ResilienceExecutor } from '../resilience.js';
+import { readStreamLines } from '../stream.util.js';
 
 export class ClaudeProvider implements AIProvider {
   public static readonly DEFAULT_MODEL = 'claude-3-5-haiku-20241022';

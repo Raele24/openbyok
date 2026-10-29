@@ -1,4 +1,4 @@
-﻿/**
+/**
  * openbyok/ui â€” Headless Controller & Themeable <byok-settings> Web Component
  *
  * Provides two UI integration layers:
@@ -13,7 +13,7 @@ import {
   ConnectionTestResult,
   ProviderId,
   SupportedLanguage,
-} from '../../core/src/index';
+} from '../../core/src/index.js';
 
 export interface ByokUiState {
   activeProvider: ProviderId;
@@ -253,6 +253,16 @@ const DEFAULT_STYLES = `
 }
 `;
 
+export function escapeHtml(raw: string): string {
+  if (!raw) return '';
+  return String(raw)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export function registerByokSettingsElement(tagName = 'byok-settings'): void {
   if (typeof window === 'undefined' || typeof customElements === 'undefined') return;
   if (customElements.get(tagName)) return;
@@ -291,63 +301,63 @@ export function registerByokSettingsElement(tagName = 'byok-settings'): void {
 
       const styleBlock = this.unstyled ? '' : `<style>${DEFAULT_STYLES}</style>`;
       const statusHtml = state.lastTestResult
-        ? `<div class="${cls.statusBanner || 'byok-status'}">${state.lastTestResult.message}</div>`
+        ? `<div class="${escapeHtml(cls.statusBanner || 'byok-status')}">${escapeHtml(state.lastTestResult.message)}</div>`
         : '';
 
       this.root.innerHTML = `
         ${styleBlock}
-        <div class="${cls.container || 'byok-card'}">
-          <h3 class="${cls.header || 'byok-header'}">${t.settingsTitle}</h3>
+        <div class="${escapeHtml(cls.container || 'byok-card')}">
+          <h3 class="${escapeHtml(cls.header || 'byok-header')}">${escapeHtml(t.settingsTitle)}</h3>
 
-          <div class="${cls.fieldGroup || 'byok-field'}">
-            <label class="${cls.label || 'byok-label'}">${t.providerLabel}</label>
-            <select id="byok-provider-select" class="${cls.select || 'byok-select'}">
+          <div class="${escapeHtml(cls.fieldGroup || 'byok-field')}">
+            <label class="${escapeHtml(cls.label || 'byok-label')}">${escapeHtml(t.providerLabel)}</label>
+            <select id="byok-provider-select" class="${escapeHtml(cls.select || 'byok-select')}">
               ${state.providers
                 .map(
                   (p) =>
-                    `<option value="${p.id}" ${p.id === state.activeProvider ? 'selected' : ''}>${p.name}</option>`
+                    `<option value="${escapeHtml(p.id)}" ${p.id === state.activeProvider ? 'selected' : ''}>${escapeHtml(p.name)}</option>`
                 )
                 .join('')}
             </select>
           </div>
 
-          <div class="${cls.fieldGroup || 'byok-field'}">
-            <label class="${cls.label || 'byok-label'}">${t.vaultModeLabel}</label>
-            <select id="byok-vault-select" class="${cls.select || 'byok-select'}">
-              <option value="session" ${state.vaultMode === 'session' ? 'selected' : ''}>${t.vaultModeSession}</option>
-              <option value="encrypted" ${state.vaultMode === 'encrypted' ? 'selected' : ''}>${t.vaultModeEncrypted}</option>
+          <div class="${escapeHtml(cls.fieldGroup || 'byok-field')}">
+            <label class="${escapeHtml(cls.label || 'byok-label')}">${escapeHtml(t.vaultModeLabel)}</label>
+            <select id="byok-vault-select" class="${escapeHtml(cls.select || 'byok-select')}">
+              <option value="session" ${state.vaultMode === 'session' ? 'selected' : ''}>${escapeHtml(t.vaultModeSession)}</option>
+              <option value="encrypted" ${state.vaultMode === 'encrypted' ? 'selected' : ''}>${escapeHtml(t.vaultModeEncrypted)}</option>
             </select>
           </div>
 
-          <div class="${cls.fieldGroup || 'byok-field'}">
-            <label class="${cls.label || 'byok-label'}">${t.apiKeyLabel}</label>
+          <div class="${escapeHtml(cls.fieldGroup || 'byok-field')}">
+            <label class="${escapeHtml(cls.label || 'byok-label')}">${escapeHtml(t.apiKeyLabel)}</label>
             <input
               id="byok-key-input"
               type="password"
-              class="${cls.input || 'byok-input'}"
-              placeholder="${t.apiKeyPlaceholder}"
-              value="${state.activeKey}"
+              class="${escapeHtml(cls.input || 'byok-input')}"
+              placeholder="${escapeHtml(t.apiKeyPlaceholder)}"
+              value="${escapeHtml(state.activeKey)}"
             />
           </div>
 
-          <div class="${cls.fieldGroup || 'byok-field'}">
-            <label class="${cls.label || 'byok-label'}">${t.modelLabel}</label>
+          <div class="${escapeHtml(cls.fieldGroup || 'byok-field')}">
+            <label class="${escapeHtml(cls.label || 'byok-label')}">${escapeHtml(t.modelLabel)}</label>
             <input
               id="byok-model-input"
               type="text"
-              class="${cls.input || 'byok-input'}"
-              value="${state.customModel}"
+              class="${escapeHtml(cls.input || 'byok-input')}"
+              value="${escapeHtml(state.customModel)}"
             />
           </div>
 
           ${statusHtml}
 
-          <div class="${cls.buttonRow || 'byok-actions'}">
-            <button id="byok-test-btn" type="button" class="${cls.secondaryButton || 'byok-btn byok-btn-secondary'}">
-              ${state.isTesting ? t.testingConnection : t.testConnectionBtn}
+          <div class="${escapeHtml(cls.buttonRow || 'byok-actions')}">
+            <button id="byok-test-btn" type="button" class="${escapeHtml(cls.secondaryButton || 'byok-btn byok-btn-secondary')}">
+              ${escapeHtml(state.isTesting ? t.testingConnection : t.testConnectionBtn)}
             </button>
-            <button id="byok-purge-btn" type="button" class="${cls.dangerButton || 'byok-btn byok-btn-danger'}">
-              ${t.purgeBtn}
+            <button id="byok-purge-btn" type="button" class="${escapeHtml(cls.dangerButton || 'byok-btn byok-btn-danger')}">
+              ${escapeHtml(t.purgeBtn)}
             </button>
           </div>
         </div>

@@ -5,7 +5,7 @@
  * across English, Italian, French, Spanish, and German, with custom locale registration.
  */
 
-import { SupportedLanguage } from './types';
+import { SupportedLanguage } from './types.js';
 
 export interface ByokTranslationStrings {
   languageName: string;

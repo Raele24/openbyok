@@ -2,11 +2,11 @@
  * Resilience Executor
  *
  * Provides configurable per-model timeouts, exponential backoff retries,
- * automatic model candidate failover, and session working-model caching
- * for any built-in or custom AI provider.
+ * automatic model candidate failover, session working-model caching,
+ * and automatic API key scrubbing from error messages.
  */
 
-import { ResiliencePolicy } from './types';
+import { ResiliencePolicy } from './types.js';
 
 export const DEFAULT_RESILIENCE_POLICY: Required<Omit<ResiliencePolicy, 'perModelTimeoutMs'>> = {
   timeoutMs: 30000,
@@ -16,6 +16,20 @@ export const DEFAULT_RESILIENCE_POLICY: Required<Omit<ResiliencePolicy, 'perMode
   failoverStatusCodes: [400, 404, 408, 429, 500, 502, 503, 504],
   rememberWorkingModel: true,
 };
+
+/**
+ * Scrubs any raw API key occurrence from error messages or upstream HTTP responses
+ * so secrets are never leaked into console logs, stack traces, or UI alerts.
+ */
+export function sanitizeErrorMessage(message: string, apiKey?: string): string {
+  if (!message) return '';
+  let sanitized = message;
+  const cleanKey = (apiKey || '').trim();
+  if (cleanKey.length >= 6 && cleanKey !== 'local') {
+    sanitized = sanitized.split(cleanKey).join('***REDACTED***');
+  }
+  return sanitized;
+}
 
 export class HttpStatusError extends Error {
   constructor(
@@ -90,7 +104,8 @@ export class ResilienceExecutor {
 
   /**
    * Executes an operation across an ordered list of candidate models with
-   * per-model AbortController timeouts, retry backoff, and automatic failover.
+   * per-model AbortController timeouts, retry backoff, automatic failover,
+   * and automatic secret scrubbing on thrown errors.
    */
   public async executeWithFailover<T>(options: {
     providerId: string;
@@ -144,10 +159,16 @@ export class ResilienceExecutor {
             lastError = new Error(
               `AI vision model (${model}) timed out after ${modelTimeout / 1000}s due to high server load.`
             );
+          } else if (err instanceof HttpStatusError) {
+            lastError = new HttpStatusError(
+              sanitizeErrorMessage(err.message, options.apiKey),
+              err.status,
+              err.model
+            );
           } else if (err instanceof Error) {
-            lastError = err;
+            lastError = new Error(sanitizeErrorMessage(err.message, options.apiKey));
           } else {
-            lastError = new Error(String(err));
+            lastError = new Error(sanitizeErrorMessage(String(err), options.apiKey));
           }
 
           this.failedModelsInSession.add(`${options.providerId}:${model}`);
@@ -203,4 +224,3 @@ export class ResilienceExecutor {
     } catch { }
   }
 }
-

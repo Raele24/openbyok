@@ -5,8 +5,8 @@
  * without bundling a duplicate Vue runtime.
  */
 
-import { ByokClient, ByokClientOptions, ProviderId } from '../../core/src/index';
-import { ByokHeadlessController, ByokUiState } from '../../ui/src/index';
+import { ByokClient, ByokClientOptions, ProviderId } from '../../core/src/index.js';
+import { ByokHeadlessController, ByokUiState } from '../../ui/src/index.js';
 
 export interface VueRef<T> {
   value: T;

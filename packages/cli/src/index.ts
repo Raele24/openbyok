@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as readline from 'readline';
-import { ProviderId, VaultAdapter } from '../../core/src/index';
+import { ProviderId, VaultAdapter } from '../../core/src/index.js';
 
 export interface CliConfigData {
   /** Per-provider API key map (e.g. { gemini: 'AIza...', openai: 'sk-...', claude: 'sk-ant-...' }) */

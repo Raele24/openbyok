@@ -11,7 +11,7 @@ import {
   ByokClientOptions,
   ProviderId,
   VaultManager,
-} from '../../core/src/index';
+} from '../../core/src/index.js';
 
 export interface SignalLike<T> {
   (): T;

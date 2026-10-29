@@ -7,15 +7,24 @@
  * Security Properties:
  * - The passphrase is NEVER written to localStorage, sessionStorage, or disk.
  * - Stores an encrypted verification canary ('byok_vault_canary') to validate the passphrase on unlock().
- * - Calling lock() immediately wipes the in-memory passphrase, rendering stored ciphertexts undecryptable
- *   even if the physical disk or browser profile directory is copied.
+ * - Includes brute-force rate limiting: locks out unlock() attempts with exponential backoff after
+ *   consecutive failed PIN attempts.
+ * - Calling lock() immediately wipes the in-memory passphrase and derived CryptoKey cache.
  */
 
-import { VaultAdapter } from '../types';
-import { WebCryptoVaultAdapter, WebCryptoVaultOptions } from './webcrypto.vault';
+import { VaultAdapter } from '../types.js';
+import { WebCryptoVaultAdapter, WebCryptoVaultOptions } from './webcrypto.vault.js';
 
 const CANARY_STORAGE_KEY = 'byok_vault_canary';
 const CANARY_PLAINTEXT = 'BYOK_CANARY_VERIFIED_V1';
+
+export interface PassphraseVaultOptions extends WebCryptoVaultOptions {
+  canaryStorageKey?: string;
+  /** Maximum consecutive failed unlock attempts before temporary lockout (default: 5) */
+  maxFailedAttempts?: number;
+  /** Base lockout cooldown in milliseconds when maxFailedAttempts is reached (default: 5000) */
+  lockoutCooldownMs?: number;
+}
 
 export class PassphraseVaultAdapter implements VaultAdapter {
   public readonly id = 'passphrase';
@@ -24,13 +33,19 @@ export class PassphraseVaultAdapter implements VaultAdapter {
   private innerVault: WebCryptoVaultAdapter;
   private unlocked = false;
   private canaryKey: string;
+  private failedAttempts = 0;
+  private lockedUntil = 0;
+  private maxFailedAttempts: number;
+  private lockoutCooldownMs: number;
 
-  constructor(options: WebCryptoVaultOptions & { canaryStorageKey?: string } = {}) {
+  constructor(options: PassphraseVaultOptions = {}) {
     this.innerVault = new WebCryptoVaultAdapter({
       ...options,
       storagePrefix: options.storagePrefix || 'byok_pin_vault_',
     });
     this.canaryKey = options.canaryStorageKey || CANARY_STORAGE_KEY;
+    this.maxFailedAttempts = options.maxFailedAttempts ?? 5;
+    this.lockoutCooldownMs = options.lockoutCooldownMs ?? 5000;
   }
 
   /**
@@ -41,19 +56,40 @@ export class PassphraseVaultAdapter implements VaultAdapter {
   }
 
   /**
-   * Locks the vault and wipes the passphrase from runtime memory.
+   * Returns the number of consecutive failed unlock attempts.
+   */
+  public getFailedAttempts(): number {
+    return this.failedAttempts;
+  }
+
+  /**
+   * Returns remaining brute-force lockout time in milliseconds (0 if not locked out).
+   */
+  public getRemainingLockoutMs(): number {
+    return Math.max(0, this.lockedUntil - Date.now());
+  }
+
+  /**
+   * Locks the vault and wipes the passphrase and derived CryptoKey from runtime memory.
    */
   public lock(): void {
     this.unlocked = false;
     this.innerVault.setPassphrase('__locked_vault__');
+    this.innerVault.clearKeyCache();
   }
 
   /**
    * Unlocks the vault with the user's PIN/passphrase.
-   * If a canary already exists on disk, verifies that the passphrase decrypts it.
-   * If no canary exists yet, initializes a new canary encrypted with this passphrase.
+   * Enforces brute-force lockout cooldown after maxFailedAttempts consecutive failures.
    */
   public async unlock(passphrase: string): Promise<boolean> {
+    const remainingLockout = this.getRemainingLockoutMs();
+    if (remainingLockout > 0) {
+      throw new Error(
+        `Too many failed PIN attempts. Vault is temporarily locked for ${Math.ceil(remainingLockout / 1000)}s.`
+      );
+    }
+
     const clean = passphrase.trim();
     if (!clean) return false;
 
@@ -64,6 +100,11 @@ export class PassphraseVaultAdapter implements VaultAdapter {
       if (existingCanary) {
         const decrypted = await this.innerVault.decryptSecret(existingCanary);
         if (decrypted !== CANARY_PLAINTEXT) {
+          this.failedAttempts += 1;
+          if (this.failedAttempts >= this.maxFailedAttempts) {
+            const multiplier = Math.pow(2, this.failedAttempts - this.maxFailedAttempts);
+            this.lockedUntil = Date.now() + this.lockoutCooldownMs * multiplier;
+          }
           this.lock();
           return false;
         }
@@ -75,6 +116,8 @@ export class PassphraseVaultAdapter implements VaultAdapter {
       }
     }
 
+    this.failedAttempts = 0;
+    this.lockedUntil = 0;
     this.unlocked = true;
     return true;
   }
@@ -104,7 +147,8 @@ export class PassphraseVaultAdapter implements VaultAdapter {
         localStorage.removeItem(this.canaryKey);
       } catch { }
     }
+    this.failedAttempts = 0;
+    this.lockedUntil = 0;
     this.lock();
   }
 }
-

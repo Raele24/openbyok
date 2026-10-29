@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Google Gemini Provider
  *
  * Interacts directly with the Google Gemini REST API (v1beta).
@@ -11,9 +11,9 @@ import {
   ConnectionTestResult,
   GenerationRequest,
   ProviderConfig,
-} from '../types';
-import { HttpStatusError, ResilienceExecutor } from '../resilience';
-import { readStreamLines } from '../stream.util';
+} from '../types.js';
+import { HttpStatusError, ResilienceExecutor } from '../resilience.js';
+import { readStreamLines } from '../stream.util.js';
 
 export class GeminiProvider implements AIProvider {
   public readonly id = 'gemini';

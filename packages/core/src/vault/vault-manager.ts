@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Vault Manager
  *
  * Orchestrates multiple VaultAdapters (e.g. 'session' MemoryVaultAdapter,
@@ -6,9 +6,9 @@
  * Handles runtime switching between storage modes while keeping in-memory keys synchronized.
  */
 
-import { VaultAdapter } from '../types';
-import { MemoryVaultAdapter } from './memory.vault';
-import { WebCryptoVaultAdapter, WebCryptoVaultOptions } from './webcrypto.vault';
+import { VaultAdapter } from '../types.js';
+import { MemoryVaultAdapter } from './memory.vault.js';
+import { WebCryptoVaultAdapter, WebCryptoVaultOptions } from './webcrypto.vault.js';
 
 export type VaultChangeListener = () => void;
 

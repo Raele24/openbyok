@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Ollama Local AI Provider
  *
  * Implements the AIProvider interface for locally hosted Ollama instances
@@ -10,9 +10,9 @@ import {
   ConnectionTestResult,
   GenerationRequest,
   ProviderConfig,
-} from '../types';
-import { HttpStatusError, ResilienceExecutor } from '../resilience';
-import { readStreamLines } from '../stream.util';
+} from '../types.js';
+import { HttpStatusError, ResilienceExecutor } from '../resilience.js';
+import { readStreamLines } from '../stream.util.js';
 
 export class OllamaProvider implements AIProvider {
   public static readonly DEFAULT_ENDPOINT = 'http://localhost:11434';

@@ -1,11 +1,11 @@
-/**
+﻿/**
  * Memory Vault Adapter (Default Tier 1)
  *
  * Stores credentials strictly in volatile JavaScript runtime memory.
  * Zero disk writes, zero localStorage traces. All secrets are cleared when the tab or process exits.
  */
 
-import { VaultAdapter } from '../types';
+import { VaultAdapter } from '../types.js';
 
 export class MemoryVaultAdapter implements VaultAdapter {
   public readonly id = 'session';

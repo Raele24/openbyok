@@ -15,16 +15,17 @@ import {
   ResiliencePolicy,
   UsageMetrics,
   VaultAdapter,
-} from './types';
-import { UsageTracker } from './budget';
-import { ProviderRegistry } from './providers/registry';
+} from './types.js';
+import { UsageTracker } from './budget.js';
+import { sanitizeErrorMessage } from './resilience.js';
+import { ProviderRegistry } from './providers/registry.js';
 import {
   createOpenAICompatibleProvider,
   OpenAICompatibleOptions,
-} from './providers/openai.provider';
-import { VaultManager } from './vault/vault-manager';
-import { WebCryptoVaultOptions } from './vault/webcrypto.vault';
-import { PassphraseVaultAdapter } from './vault/passphrase.vault';
+} from './providers/openai.provider.js';
+import { VaultManager } from './vault/vault-manager.js';
+import { WebCryptoVaultOptions } from './vault/webcrypto.vault.js';
+import { PassphraseVaultAdapter, PassphraseVaultOptions } from './vault/passphrase.vault.js';
 
 export interface ByokClientOptions {
   /** Default active provider ID (default: 'gemini') */
@@ -33,8 +34,8 @@ export interface ByokClientOptions {
   fallbackProviders?: ProviderId[];
   /** Default vault storage mode ('session' | 'encrypted' | 'passphrase' | custom adapter ID) */
   defaultVaultMode?: string;
-  /** Custom options for the built-in WebCrypto AES-GCM-256 vault */
-  webCryptoOptions?: WebCryptoVaultOptions;
+  /** Custom options for the built-in WebCrypto and Passphrase vaults */
+  webCryptoOptions?: WebCryptoVaultOptions & PassphraseVaultOptions;
   /** Custom VaultAdapter implementations */
   customVaultAdapters?: VaultAdapter[];
   /** Custom AIProvider instances */
@@ -180,8 +181,6 @@ export class ByokClient {
           ? explicitApiKey
           : await this.vault.getKey(id);
 
-      // Include primary provider (even if key missing so it throws a clear error if alone)
-      // or any fallback provider that either requires no key (Ollama) or has a key stored
       if (i === 0 || !provider.requiresKey || apiKey.trim().length > 0) {
         resolvedChain.push({ provider, apiKey });
       }
@@ -197,42 +196,43 @@ export class ByokClient {
       fallbackProviders?: ProviderId[];
     }
   ): Promise<string> {
-    this.budget.assertWithinBudget(request);
-    const primaryId = options?.providerId || this.activeProviderId;
-    const chain = await this.resolveProviderChain(
-      primaryId,
-      options?.fallbackProviders,
-      options?.apiKey
-    );
+    const releaseSlot = this.budget.acquireSlot(request);
+    try {
+      const primaryId = options?.providerId || this.activeProviderId;
+      const chain = await this.resolveProviderChain(
+        primaryId,
+        options?.fallbackProviders,
+        options?.apiKey
+      );
 
-    let lastError: Error | null = null;
-    for (let i = 0; i < chain.length; i++) {
-      const { provider, apiKey } = chain[i];
-      const config = await this.resolveConfig(provider.id, {
-        ...options,
-        apiKey,
-        // Only apply explicit model/baseUrl override to the primary provider
-        model: i === 0 ? options?.model : undefined,
-        baseUrl: i === 0 ? options?.baseUrl : undefined,
-      });
+      let lastError: Error | null = null;
+      for (let i = 0; i < chain.length; i++) {
+        const { provider, apiKey } = chain[i];
+        const config = await this.resolveConfig(provider.id, {
+          ...options,
+          apiKey,
+          model: i === 0 ? options?.model : undefined,
+          baseUrl: i === 0 ? options?.baseUrl : undefined,
+        });
 
-      try {
-        const output = await provider.generateText(request, config);
-        this.budget.recordUsage(provider.id, request, output);
-        return output;
-      } catch (err: unknown) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-        if (i < chain.length - 1) {
-          console.warn(
-            `[ByokClient] Provider "${provider.id}" failed (${lastError.message}). Failing over to provider "${chain[i + 1].provider.id}".`
-          );
-          continue;
+        try {
+          const output = await provider.generateText(request, config);
+          this.budget.recordUsage(provider.id, request, output);
+          return output;
+        } catch (err: unknown) {
+          const rawMsg = err instanceof Error ? err.message : String(err);
+          lastError = new Error(sanitizeErrorMessage(rawMsg, apiKey));
+          if (i < chain.length - 1) {
+            continue;
+          }
+          throw lastError;
         }
-        throw lastError;
       }
-    }
 
-    throw lastError || new Error('All configured AI providers failed.');
+      throw lastError || new Error('All configured AI providers failed.');
+    } finally {
+      releaseSlot();
+    }
   }
 
   public async generateObject<T = Record<string, unknown>>(
@@ -242,41 +242,43 @@ export class ByokClient {
       fallbackProviders?: ProviderId[];
     }
   ): Promise<T> {
-    this.budget.assertWithinBudget(request);
-    const primaryId = options?.providerId || this.activeProviderId;
-    const chain = await this.resolveProviderChain(
-      primaryId,
-      options?.fallbackProviders,
-      options?.apiKey
-    );
+    const releaseSlot = this.budget.acquireSlot(request);
+    try {
+      const primaryId = options?.providerId || this.activeProviderId;
+      const chain = await this.resolveProviderChain(
+        primaryId,
+        options?.fallbackProviders,
+        options?.apiKey
+      );
 
-    let lastError: Error | null = null;
-    for (let i = 0; i < chain.length; i++) {
-      const { provider, apiKey } = chain[i];
-      const config = await this.resolveConfig(provider.id, {
-        ...options,
-        apiKey,
-        model: i === 0 ? options?.model : undefined,
-        baseUrl: i === 0 ? options?.baseUrl : undefined,
-      });
+      let lastError: Error | null = null;
+      for (let i = 0; i < chain.length; i++) {
+        const { provider, apiKey } = chain[i];
+        const config = await this.resolveConfig(provider.id, {
+          ...options,
+          apiKey,
+          model: i === 0 ? options?.model : undefined,
+          baseUrl: i === 0 ? options?.baseUrl : undefined,
+        });
 
-      try {
-        const result = await provider.generateObject<T>(request, config);
-        this.budget.recordUsage(provider.id, request, JSON.stringify(result));
-        return result;
-      } catch (err: unknown) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-        if (i < chain.length - 1) {
-          console.warn(
-            `[ByokClient] Provider "${provider.id}" failed (${lastError.message}). Failing over to provider "${chain[i + 1].provider.id}".`
-          );
-          continue;
+        try {
+          const result = await provider.generateObject<T>(request, config);
+          this.budget.recordUsage(provider.id, request, JSON.stringify(result));
+          return result;
+        } catch (err: unknown) {
+          const rawMsg = err instanceof Error ? err.message : String(err);
+          lastError = new Error(sanitizeErrorMessage(rawMsg, apiKey));
+          if (i < chain.length - 1) {
+            continue;
+          }
+          throw lastError;
         }
-        throw lastError;
       }
-    }
 
-    throw lastError || new Error('All configured AI providers failed.');
+      throw lastError || new Error('All configured AI providers failed.');
+    } finally {
+      releaseSlot();
+    }
   }
 
   /**
@@ -289,48 +291,53 @@ export class ByokClient {
       fallbackProviders?: ProviderId[];
     }
   ): AsyncGenerator<string, void, unknown> {
-    this.budget.assertWithinBudget(request);
-    const primaryId = options?.providerId || this.activeProviderId;
-    const chain = await this.resolveProviderChain(
-      primaryId,
-      options?.fallbackProviders,
-      options?.apiKey
-    );
+    const releaseSlot = this.budget.acquireSlot(request);
+    try {
+      const primaryId = options?.providerId || this.activeProviderId;
+      const chain = await this.resolveProviderChain(
+        primaryId,
+        options?.fallbackProviders,
+        options?.apiKey
+      );
 
-    let lastError: Error | null = null;
-    for (let i = 0; i < chain.length; i++) {
-      const { provider, apiKey } = chain[i];
-      const config = await this.resolveConfig(provider.id, {
-        ...options,
-        apiKey,
-        model: i === 0 ? options?.model : undefined,
-        baseUrl: i === 0 ? options?.baseUrl : undefined,
-      });
+      let lastError: Error | null = null;
+      for (let i = 0; i < chain.length; i++) {
+        const { provider, apiKey } = chain[i];
+        const config = await this.resolveConfig(provider.id, {
+          ...options,
+          apiKey,
+          model: i === 0 ? options?.model : undefined,
+          baseUrl: i === 0 ? options?.baseUrl : undefined,
+        });
 
-      try {
-        let collected = '';
-        if (provider.generateStream) {
-          for await (const chunk of provider.generateStream(request, config)) {
-            collected += chunk;
-            yield chunk;
+        try {
+          let collected = '';
+          if (provider.generateStream) {
+            for await (const chunk of provider.generateStream(request, config)) {
+              collected += chunk;
+              yield chunk;
+            }
+          } else {
+            const fullText = await provider.generateText(request, config);
+            collected = fullText;
+            yield fullText;
           }
-        } else {
-          const fullText = await provider.generateText(request, config);
-          collected = fullText;
-          yield fullText;
+          this.budget.recordUsage(provider.id, request, collected);
+          return;
+        } catch (err: unknown) {
+          const rawMsg = err instanceof Error ? err.message : String(err);
+          lastError = new Error(sanitizeErrorMessage(rawMsg, apiKey));
+          if (i < chain.length - 1) {
+            continue;
+          }
+          throw lastError;
         }
-        this.budget.recordUsage(provider.id, request, collected);
-        return;
-      } catch (err: unknown) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-        if (i < chain.length - 1) {
-          continue;
-        }
-        throw lastError;
       }
-    }
 
-    if (lastError) throw lastError;
+      if (lastError) throw lastError;
+    } finally {
+      releaseSlot();
+    }
   }
 
   public async testConnection(
@@ -350,4 +357,3 @@ export class ByokClient {
 export function createByok(options?: ByokClientOptions): ByokClient {
   return new ByokClient(options);
 }
-

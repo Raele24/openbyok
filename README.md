@@ -1,19 +1,13 @@
 # openbyok
 
-Zero-dependency TypeScript and Python toolkit for Bring Your Own Key (BYOK) and local offline AI applications across Web Browsers, Desktop, Mobile, Node.js CLI, and Python environments.
+Zero-dependency TypeScript toolkit for Bring Your Own Key (BYOK) and local offline AI applications across Web Browsers, Desktop, Mobile, and Node.js CLI environments.
 
 ---
 
 ## Installation
 
-### JavaScript / TypeScript (Browser, Node.js, Angular, React, Vue)
 ```bash
 npm install openbyok
-```
-
-### Python (CLI & Backend Scripts)
-```bash
-pip install "git+https://github.com/Raele24/openbyok.git#subdirectory=packages/python"
 ```
 
 ---
@@ -25,22 +19,22 @@ pip install "git+https://github.com/Raele24/openbyok.git#subdirectory=packages/p
    - Built-in `createOpenAICompatibleProvider()` factory to register Groq, OpenRouter, DeepSeek, Mistral, Together AI, LM Studio, or vLLM with a simple configuration object.
    - Open `AIProvider` interface for custom endpoints.
 2. **Per-Model & Cross-Provider Failover (`ResilienceExecutor` & `fallbackProviders`)**:
-   - Per-model timeouts (`AbortController`), retry counts with exponential backoff, automatic model discovery, and session working-model caching.
+   - Per-model timeouts (`AbortController`), retry counts with exponential backoff, automatic model discovery, session working-model caching, and automatic API key redaction in error messages.
    - **Cross-Provider Cascade**: Configure `fallbackProviders: ['openai', 'ollama']` so if the primary provider hits a rate limit (`429`) or outage (`503`), `ByokClient` automatically cascades to the next configured provider.
 3. **Universal Real-Time Streaming (`generateStream`)**:
    - Unified `AsyncGenerator<string>` streaming across Gemini SSE, OpenAI SSE, Claude SSE, and Ollama NDJSON.
 4. **Session Token & Cost Budget Guard (`UsageTracker` & `BudgetPolicy`)**:
-   - Tracks per-provider requests, estimated input/output tokens, and USD cost (`getUsageMetrics()`).
+   - Concurrency-safe tracking of per-provider requests, estimated input/output tokens, and USD cost (`getUsageMetrics()`).
    - Enforces `maxRequestsPerSession`, `maxEstimatedTokensPerSession`, and `maxCostUsdPerSession` via `BudgetExceededError`.
 5. **Pluggable Credential Vaults (`VaultAdapter`)**:
    - **Session Memory Vault (`MemoryVaultAdapter` - `session`)**: Stores keys exclusively in volatile JavaScript RAM. Zero disk writes.
-   - **Encrypted Persistent Vault (`WebCryptoVaultAdapter` - `encrypted`)**: Encrypts keys at rest in browser storage using authenticated `crypto.subtle` AES-GCM-256 and PBKDF2 (100,000 SHA-256 iterations).
-   - **Passphrase / PIN Locked Vault (`PassphraseVaultAdapter` - `passphrase`)**: Derives the AES-GCM-256 key strictly from a user-entered PIN/passphrase (`unlock(pin)` / `lock()`) verified against an encrypted canary. The passphrase is never stored on disk.
-   - **Node / CLI & Python Vault (`PosixFileVaultAdapter` - `posix-file`)**: Stores isolated keys per provider (`keys: { gemini, openai, claude, ollama }`) in `~/.<app>/config.json` with strict `0600` file permissions and `0700` directory permissions, enforcing `CLI Flag > Environment Variable > Stored Config` precedence.
+   - **Encrypted Persistent Vault (`WebCryptoVaultAdapter` - `encrypted`)**: Encrypts keys at rest in browser storage using authenticated `crypto.subtle` AES-GCM-256 and PBKDF2 (100,000 SHA-256 iterations) with in-memory `CryptoKey` caching and strict refusal of plaintext storage fallback.
+   - **Passphrase / PIN Locked Vault (`PassphraseVaultAdapter` - `passphrase`)**: Derives the AES-GCM-256 key strictly from a user-entered PIN/passphrase (`unlock(pin)` / `lock()`) verified against an encrypted canary with built-in brute-force lockout protection.
+   - **Node / CLI Vault (`PosixFileVaultAdapter` - `posix-file`)**: Stores isolated keys per provider (`keys: { gemini, openai, claude, ollama }`) in `~/.<app>/config.json` with strict `0600` file permissions and `0700` directory permissions, enforcing `CLI Flag > Environment Variable > Stored Config` precedence.
 6. **Adaptive UI & Multi-Framework Subpath Exports**:
    - **Headless Controller (`openbyok/ui`)**: Framework-agnostic reactive state for custom UIs.
    - **Themeable Web Component (`<byok-settings>`)**: Drop-in HTML element customizable via CSS Custom Properties (`--byok-*`) or unstyled CSS class injection (Tailwind, Bootstrap).
-   - **Framework Wrappers**: `openbyok/angular` (Signals), `openbyok/react` (Hooks), `openbyok/vue` (Vue 3 Composables), and `openbyok` (Python SDK).
+   - **Framework Wrappers**: `openbyok/angular` (Signals), `openbyok/react` (Hooks), and `openbyok/vue` (Vue 3 Composables).
 7. **Multilingual Localization (i18n)**:
    - Built-in translations for English (`en`), Italian (`it`), French (`fr`), Spanish (`es`), and German (`de`), plus `ByokLocalizer.registerLocale()` for custom languages.
 
@@ -56,7 +50,6 @@ pip install "git+https://github.com/Raele24/openbyok.git#subdirectory=packages/p
 | `openbyok/angular` | Angular 16+ | Reactive Angular Signals integration (`createByokSignalStore`). |
 | `openbyok/react` | React 17/18/19 | Reactive React Hook factory (`createByokReactHook`). |
 | `openbyok/vue` | Vue 3 / Nuxt | Reactive Vue 3 Composable factory (`createByokVueComposable`). |
-| `openbyok` (Python) | Python 3.9+ | Zero-dependency Python SDK sharing `~/.<app>/config.json` (`0600`) with `openbyok/cli`. |
 
 ---
 
@@ -95,7 +88,7 @@ const unlocked = await client.passphraseVault.unlock('my-secret-pin-4829');
 if (unlocked) {
   await client.vault.setKey('openai', 'sk-proj-...');
 }
-// Lock when idle (wipes passphrase from RAM)
+// Lock when idle (wipes passphrase and derived CryptoKey from RAM)
 client.passphraseVault.lock();
 ```
 
@@ -108,7 +101,7 @@ client.passphraseVault.lock();
 - [Adding Custom AI Providers](./docs/custom-providers.md)
 - [Resilience, Retry & Failover Policies](./docs/resilience-and-failover.md)
 - [UI Integration & Theming Guide](./docs/ui-theming.md)
-- [Multi-Framework (Angular, React, Vue) & Python SDK](./docs/multi-framework-and-python.md)
+- [Multi-Framework (Angular, React, Vue) Guide](./docs/multi-framework-and-python.md)
 
 ---
 

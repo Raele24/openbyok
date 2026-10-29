@@ -1,4 +1,4 @@
-/**
+﻿/**
  * OpenAI & OpenAI-Compatible Provider
  *
  * Supports OpenAI Platform as well as any OpenAI-compatible Chat Completions endpoint
@@ -10,9 +10,9 @@ import {
   ConnectionTestResult,
   GenerationRequest,
   ProviderConfig,
-} from '../types';
-import { HttpStatusError, ResilienceExecutor } from '../resilience';
-import { readStreamLines } from '../stream.util';
+} from '../types.js';
+import { HttpStatusError, ResilienceExecutor } from '../resilience.js';
+import { readStreamLines } from '../stream.util.js';
 
 export interface OpenAICompatibleOptions {
   id: string;

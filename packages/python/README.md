@@ -5,7 +5,7 @@ Zero-dependency Python SDK for Bring Your Own Key (BYOK) AI applications. Shares
 ## Installation
 
 ```bash
-pip install openbyok
+pip install "git+https://github.com/Raele24/openbyok.git#subdirectory=packages/python"
 ```
 
 ## Quick Usage

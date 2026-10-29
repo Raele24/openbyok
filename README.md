@@ -13,7 +13,7 @@ npm install openbyok
 
 ### Python (CLI & Backend Scripts)
 ```bash
-pip install openbyok
+pip install "git+https://github.com/Raele24/openbyok.git#subdirectory=packages/python"
 ```
 
 ---

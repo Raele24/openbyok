@@ -1,5 +1,5 @@
 /**
- * openbyok/ui â€” Headless Controller & Themeable <byok-settings> Web Component
+ * openbyok/ui — Headless Controller & Themeable <byok-settings> Web Component
  *
  * Provides two UI integration layers:
  * 1. ByokHeadlessController: Framework-agnostic reactive state for custom UIs (React, Vue, Angular, Svelte, Vanilla).
@@ -8,6 +8,7 @@
  */
 
 import {
+  BudgetPolicy,
   ByokClient,
   ByokLocalizer,
   ConnectionTestResult,
@@ -23,6 +24,8 @@ export interface ByokUiState {
   hasKey: boolean;
   customEndpoint: string;
   customModel: string;
+  availableModels: string[];
+  isLoadingModels: boolean;
   language: SupportedLanguage;
   isTesting: boolean;
   lastTestResult: ConnectionTestResult | null;
@@ -48,8 +51,8 @@ export interface ByokClassNames {
  */
 export class ByokHeadlessController {
   private listeners = new Set<(state: ByokUiState) => void>();
-  private endpoints = new Map<string, string>();
-  private models = new Map<string, string>();
+  private availableModelsByProvider = new Map<string, string[]>();
+  private isLoadingModels = false;
   private language: SupportedLanguage = 'en';
   private isTesting = false;
   private lastTestResult: ConnectionTestResult | null = null;
@@ -64,6 +67,7 @@ export class ByokHeadlessController {
     const providerInstance = this.client.registry.get(activeProvider);
     const activeKey = this.client.vault.getCachedKey(activeProvider);
     const hasKey = !providerInstance.requiresKey || activeKey.trim().length > 0;
+    const discovered = this.availableModelsByProvider.get(activeProvider) || [];
 
     return {
       activeProvider,
@@ -75,12 +79,23 @@ export class ByokHeadlessController {
       })),
       activeKey,
       hasKey,
-      customEndpoint: this.endpoints.get(activeProvider) || providerInstance.defaultBaseUrl,
-      customModel: this.models.get(activeProvider) || providerInstance.defaultModel,
+      customEndpoint: this.client.getProviderEndpoint(activeProvider),
+      customModel: this.client.getProviderModel(activeProvider),
+      availableModels: discovered,
+      isLoadingModels: this.isLoadingModels,
       language: this.language,
       isTesting: this.isTesting,
       lastTestResult: this.lastTestResult,
     };
+  }
+
+  public async hydrate(): Promise<void> {
+    await this.client.hydrate();
+    this.emit();
+    const state = this.getState();
+    if (state.hasKey) {
+      void this.refreshModels(state.activeProvider).catch(() => {});
+    }
   }
 
   public setLanguage(lang: SupportedLanguage): void {
@@ -92,6 +107,13 @@ export class ByokHeadlessController {
     this.client.setActiveProviderId(providerId);
     this.lastTestResult = null;
     this.emit();
+
+    const target = this.client.getActiveProviderId();
+    const provider = this.client.registry.get(target);
+    const activeKey = this.client.vault.getCachedKey(target);
+    if (!provider.requiresKey || activeKey.trim().length > 0) {
+      void this.refreshModels(target).catch(() => {});
+    }
   }
 
   public async setVaultMode(modeId: string): Promise<void> {
@@ -100,21 +122,67 @@ export class ByokHeadlessController {
   }
 
   public async setKey(secret: string, providerId?: ProviderId): Promise<void> {
-    const target = providerId || this.client.getActiveProviderId();
+    const target = (providerId || this.client.getActiveProviderId()).toLowerCase();
     await this.client.vault.setKey(target, secret);
     this.emit();
+
+    if (secret && secret.trim().length > 0) {
+      void this.refreshModels(target).catch(() => {});
+    } else {
+      this.availableModelsByProvider.delete(target);
+      this.emit();
+    }
+  }
+
+  /**
+   * Queries the provider's live model catalog and updates `availableModels` in the UI state.
+   */
+  public async refreshModels(providerId?: ProviderId): Promise<string[]> {
+    const target = (providerId || this.client.getActiveProviderId()).toLowerCase();
+    const apiKey = this.client.vault.getCachedKey(target);
+    const baseUrl = this.client.getProviderEndpoint(target);
+
+    this.isLoadingModels = true;
+    this.emit();
+
+    try {
+      const models = await this.client.listModels(target, {
+        apiKey,
+        baseUrl,
+      });
+      if (models.length > 0) {
+        this.availableModelsByProvider.set(target, models);
+        const currentModel = this.client.getProviderModel(target);
+        if (!models.includes(currentModel)) {
+          this.client.setProviderModel(target, models[0]);
+        }
+      }
+      return models;
+    } finally {
+      this.isLoadingModels = false;
+      this.emit();
+    }
   }
 
   public setCustomEndpoint(url: string, providerId?: ProviderId): void {
-    const target = providerId || this.client.getActiveProviderId();
-    this.endpoints.set(target, url.trim());
+    const target = (providerId || this.client.getActiveProviderId()).toLowerCase();
+    this.client.setProviderEndpoint(target, url);
     this.emit();
   }
 
   public setCustomModel(model: string, providerId?: ProviderId): void {
-    const target = providerId || this.client.getActiveProviderId();
-    this.models.set(target, model.trim());
+    const target = (providerId || this.client.getActiveProviderId()).toLowerCase();
+    this.client.setProviderModel(target, model);
     this.emit();
+  }
+
+  public setBudgetPolicy(policy: BudgetPolicy): void {
+    this.client.setBudgetPolicy(policy);
+    this.emit();
+  }
+
+  public getBudgetPolicy(): BudgetPolicy {
+    return this.client.getBudgetPolicy();
   }
 
   public async testActiveConnection(): Promise<ConnectionTestResult> {
@@ -137,6 +205,12 @@ export class ByokHeadlessController {
 
   public async purgeAllCredentials(): Promise<void> {
     await this.client.vault.purgeAll();
+    this.availableModelsByProvider.clear();
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.removeItem('openbyok_ui_preferences_v1');
+      }
+    } catch { }
     this.lastTestResult = null;
     this.emit();
   }
@@ -304,6 +378,13 @@ export function registerByokSettingsElement(tagName = 'byok-settings'): void {
         ? `<div class="${escapeHtml(cls.statusBanner || 'byok-status')}">${escapeHtml(state.lastTestResult.message)}</div>`
         : '';
 
+      const datalistHtml =
+        state.availableModels.length > 0
+          ? `<datalist id="byok-models-list">${state.availableModels
+              .map((m) => `<option value="${escapeHtml(m)}"></option>`)
+              .join('')}</datalist>`
+          : '';
+
       this.root.innerHTML = `
         ${styleBlock}
         <div class="${escapeHtml(cls.container || 'byok-card')}">
@@ -345,9 +426,11 @@ export function registerByokSettingsElement(tagName = 'byok-settings'): void {
             <input
               id="byok-model-input"
               type="text"
+              list="byok-models-list"
               class="${escapeHtml(cls.input || 'byok-input')}"
               value="${escapeHtml(state.customModel)}"
             />
+            ${datalistHtml}
           </div>
 
           ${statusHtml}
@@ -397,4 +480,3 @@ export function registerByokSettingsElement(tagName = 'byok-settings'): void {
 
   customElements.define(tagName, ByokSettingsElement);
 }
-

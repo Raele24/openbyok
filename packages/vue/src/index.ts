@@ -1,11 +1,17 @@
-﻿/**
- * openbyok/vue â€” Vue 3 Composition API Adapter for openbyok/core & openbyok/ui
+/**
+ * openbyok/vue — Vue 3 Composition API Adapter for openbyok/core & openbyok/ui
  *
  * Accepts Vue reactivity primitives (`ref`, `onUnmounted`) so it works in Vue 3 and Nuxt 3
  * without bundling a duplicate Vue runtime.
  */
 
-import { ByokClient, ByokClientOptions, ProviderId } from '../../core/src/index.js';
+import {
+  BudgetPolicy,
+  ByokClient,
+  ByokClientOptions,
+  ByokEventListener,
+  ProviderId,
+} from '../../core/src/index.js';
 import { ByokHeadlessController, ByokUiState } from '../../ui/src/index.js';
 
 export interface VueRef<T> {
@@ -52,6 +58,14 @@ export function createByokVueComposable(
         sharedController.setCustomEndpoint(url, providerId),
       setCustomModel: (model: string, providerId?: ProviderId) =>
         sharedController.setCustomModel(model, providerId),
+      refreshModels: (providerId?: ProviderId) =>
+        sharedController.refreshModels(providerId),
+      listModels: (providerId?: ProviderId) =>
+        sharedClient.listModels(providerId),
+      hydrate: () => sharedController.hydrate(),
+      onEvent: (listener: ByokEventListener) => sharedClient.onEvent(listener),
+      setBudgetPolicy: (policy: BudgetPolicy) =>
+        sharedController.setBudgetPolicy(policy),
       testConnection: () => sharedController.testActiveConnection(),
       purgeAll: () => sharedController.purgeAllCredentials(),
       unlockPassphraseVault: (pin: string) =>
@@ -61,4 +75,3 @@ export function createByokVueComposable(
     };
   };
 }
-

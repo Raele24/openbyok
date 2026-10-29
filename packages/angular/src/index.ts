@@ -1,5 +1,5 @@
-﻿/**
- * openbyok/angular â€” Angular Signals Bridge for openbyok/core
+/**
+ * openbyok/angular — Angular Signals Bridge for openbyok/core
  *
  * Allows any Angular application (Angular 16+) to bind its Signal primitives
  * (`signal`, `computed`) to a `ByokClient` or `VaultManager` without coupling
@@ -7,6 +7,7 @@
  */
 
 import {
+  BudgetPolicy,
   ByokClient,
   ByokClientOptions,
   ProviderId,
@@ -35,6 +36,7 @@ export function createByokSignalStore(
 
   const storageMode = primitives.signal<string>(vault.getActiveMode());
   const selectedProvider = primitives.signal<ProviderId>(client.getActiveProviderId());
+  const availableModels = primitives.signal<string[]>([]);
 
   const geminiKey = primitives.signal<string>('');
   const openaiKey = primitives.signal<string>('');
@@ -76,11 +78,19 @@ export function createByokSignalStore(
     return activeApiKey().trim().length > 0;
   });
 
+  const refreshModels = async (providerId?: ProviderId): Promise<string[]> => {
+    const target = providerId || selectedProvider();
+    const models = await client.listModels(target);
+    availableModels.set(models);
+    return models;
+  };
+
   return {
     client,
     vault,
     storageMode,
     selectedProvider,
+    availableModels,
     geminiKey,
     openaiKey,
     claudeKey,
@@ -89,8 +99,8 @@ export function createByokSignalStore(
     activeApiKey,
     hasApiKey,
     hydrate: async () => {
-      const ids = client.registry.getAvailableIds();
-      await vault.hydrate(ids);
+      await client.hydrate();
+      selectedProvider.set(client.getActiveProviderId());
       syncFromVault();
     },
     setMode: async (mode: string) => {
@@ -98,10 +108,17 @@ export function createByokSignalStore(
     },
     setKey: async (providerId: ProviderId, key: string) => {
       await vault.setKey(providerId, key);
+      if (key && key.trim().length > 0) {
+        void refreshModels(providerId).catch(() => {});
+      }
+    },
+    refreshModels,
+    setBudgetPolicy: (policy: BudgetPolicy) => {
+      client.setBudgetPolicy(policy);
     },
     purgeAll: async () => {
       await vault.purgeAll();
+      availableModels.set([]);
     },
   };
 }
-

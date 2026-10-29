@@ -64,14 +64,24 @@ export class UsageTracker {
   }
 
   /**
-   * Estimates input tokens from prompt text and attached images (~258 tokens per image).
+   * Estimates input tokens from single-turn or multi-turn prompts and attached images (~258 tokens per image).
    */
   public estimateRequestInputTokens(request: GenerationRequest): number {
     const sysChars = request.systemPrompt?.length || 0;
     const schemaChars = request.schemaInstruction?.length || 0;
     const userChars = request.userPrompt?.length || 0;
-    const textTokens = Math.ceil((sysChars + schemaChars + userChars) / 4);
-    const imageTokens = (request.images?.length || 0) * 258;
+
+    let messagesChars = 0;
+    let messageImages = 0;
+    if (Array.isArray(request.messages)) {
+      for (const m of request.messages) {
+        messagesChars += m.content?.length || 0;
+        messageImages += m.images?.length || 0;
+      }
+    }
+
+    const textTokens = Math.ceil((sysChars + schemaChars + userChars + messagesChars) / 4);
+    const imageTokens = ((request.images?.length || 0) + messageImages) * 258;
     return textTokens + imageTokens;
   }
 
@@ -140,15 +150,23 @@ export class UsageTracker {
 
   /**
    * Records a completed request and updates token and cost counters.
+   * Uses exact upstream token counts when provided via `actualUsage`, or falls back to character estimation.
    */
   public recordUsage(
     providerId: ProviderId,
     request: GenerationRequest,
-    outputText: string
-  ): void {
+    outputText: string,
+    actualUsage?: { inputTokens?: number; outputTokens?: number }
+  ): { inputTokens: number; outputTokens: number; costUsd: number } {
     const id = providerId.toLowerCase();
-    const inTokens = this.estimateRequestInputTokens(request);
-    const outTokens = this.estimateOutputTokens(outputText);
+    const inTokens =
+      actualUsage?.inputTokens !== undefined && actualUsage.inputTokens > 0
+        ? actualUsage.inputTokens
+        : this.estimateRequestInputTokens(request);
+    const outTokens =
+      actualUsage?.outputTokens !== undefined && actualUsage.outputTokens > 0
+        ? actualUsage.outputTokens
+        : this.estimateOutputTokens(outputText);
     const rate = this.costRates.get(id) || { input: 0.2, output: 0.8 };
     const callCost = (inTokens / 1_000_000) * rate.input + (outTokens / 1_000_000) * rate.output;
 
@@ -170,6 +188,8 @@ export class UsageTracker {
     existing.estimatedOutputTokens += outTokens;
     existing.estimatedCostUsd += callCost;
     this.metrics.byProvider[id] = existing;
+
+    return { inputTokens: inTokens, outputTokens: outTokens, costUsd: callCost };
   }
 
   public getMetrics(): UsageMetrics {

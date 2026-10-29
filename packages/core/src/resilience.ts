@@ -1,14 +1,22 @@
 /**
  * Resilience Executor
  *
- * Provides configurable per-model timeouts, exponential backoff retries,
- * automatic model candidate failover, session working-model caching,
+ * Provides configurable per-model timeouts, external AbortSignal propagation,
+ * exponential backoff retries, automatic model candidate failover, session working-model caching,
  * and automatic API key scrubbing from error messages.
  */
 
-import { ResiliencePolicy } from './types.js';
+import {
+  ByokEventListener,
+  ChatMessage,
+  GenerationRequest,
+  MediaAttachment,
+  ResiliencePolicy,
+} from './types.js';
 
-export const DEFAULT_RESILIENCE_POLICY: Required<Omit<ResiliencePolicy, 'perModelTimeoutMs'>> = {
+export const DEFAULT_RESILIENCE_POLICY: Required<
+  Omit<ResiliencePolicy, 'perModelTimeoutMs' | 'candidateModels' | 'maxRetriesPerModel'>
+> = {
   timeoutMs: 30000,
   maxRetries: 1,
   retryBackoffMs: 800,
@@ -29,6 +37,119 @@ export function sanitizeErrorMessage(message: string, apiKey?: string): string {
     sanitized = sanitized.split(cleanKey).join('***REDACTED***');
   }
   return sanitized;
+}
+
+/**
+ * Normalizes a GenerationRequest into an ordered list of ChatMessages and a combined system prompt.
+ * Supports both single-turn (`userPrompt` + `images`) and multi-turn (`messages[]`).
+ */
+export function normalizeRequestMessages(request: GenerationRequest): {
+  systemInstruction: string;
+  turns: Array<{ role: 'user' | 'assistant'; content: string; images: MediaAttachment[] }>;
+} {
+  const systemParts: string[] = [];
+  if (request.systemPrompt?.trim()) {
+    systemParts.push(request.systemPrompt.trim());
+  }
+  if (request.schemaInstruction?.trim()) {
+    systemParts.push(request.schemaInstruction.trim());
+  }
+
+  const turns: Array<{ role: 'user' | 'assistant'; content: string; images: MediaAttachment[] }> = [];
+
+  if (Array.isArray(request.messages) && request.messages.length > 0) {
+    for (const msg of request.messages) {
+      if (msg.role === 'system') {
+        if (msg.content?.trim()) {
+          systemParts.push(msg.content.trim());
+        }
+      } else {
+        turns.push({
+          role: msg.role === 'assistant' ? 'assistant' : 'user',
+          content: msg.content || '',
+          images: msg.images ? [...msg.images] : [],
+        });
+      }
+    }
+  }
+
+  // If userPrompt is also provided (or no messages[] were provided), append it as the final user turn
+  if (request.userPrompt !== undefined && request.userPrompt !== '') {
+    turns.push({
+      role: 'user',
+      content: request.userPrompt,
+      images: request.images ? [...request.images] : [],
+    });
+  } else if (request.images && request.images.length > 0) {
+    // Attach top-level request.images to the last user turn if present, or create a user turn
+    let attached = false;
+    for (let i = turns.length - 1; i >= 0; i--) {
+      if (turns[i].role === 'user') {
+        turns[i].images.push(...request.images);
+        attached = true;
+        break;
+      }
+    }
+    if (!attached) {
+      turns.push({
+        role: 'user',
+        content: '',
+        images: [...request.images],
+      });
+    }
+  }
+
+  return {
+    systemInstruction: systemParts.join('\n\n'),
+    turns,
+  };
+}
+
+/**
+ * Parses a structured JSON object or array from an AI model text response,
+ * tolerating markdown code fences and surrounding conversational text.
+ */
+export function parseStructuredJson<T = Record<string, unknown>>(rawText: string): T {
+  let clean = (rawText || '').trim();
+  if (!clean) {
+    throw new Error('Cannot parse JSON from empty AI response.');
+  }
+
+  clean = clean
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/i, '')
+    .trim();
+
+  try {
+    return JSON.parse(clean) as T;
+  } catch {
+    // Attempt to isolate the outermost JSON object {...} or array [...]
+    const firstObj = clean.indexOf('{');
+    const lastObj = clean.lastIndexOf('}');
+    const firstArr = clean.indexOf('[');
+    const lastArr = clean.lastIndexOf(']');
+
+    let candidate = '';
+    if (
+      firstObj !== -1 &&
+      lastObj > firstObj &&
+      (firstArr === -1 || firstObj < firstArr)
+    ) {
+      candidate = clean.slice(firstObj, lastObj + 1);
+    } else if (firstArr !== -1 && lastArr > firstArr) {
+      candidate = clean.slice(firstArr, lastArr + 1);
+    }
+
+    if (candidate) {
+      try {
+        return JSON.parse(candidate) as T;
+      } catch { }
+    }
+
+    throw new Error(
+      `Failed to parse structured JSON output from AI response: ${rawText.slice(0, 160)}`
+    );
+  }
 }
 
 export class HttpStatusError extends Error {
@@ -52,14 +173,32 @@ export class ResilienceExecutor {
     this.globalPolicy = { ...this.globalPolicy, ...policy };
   }
 
-  public getMergedPolicy(override?: ResiliencePolicy): Required<Omit<ResiliencePolicy, 'perModelTimeoutMs'>> & {
+  public getMergedPolicy(
+    override?: ResiliencePolicy
+  ): Required<
+    Omit<ResiliencePolicy, 'perModelTimeoutMs' | 'candidateModels' | 'maxRetriesPerModel'>
+  > & {
     perModelTimeoutMs?: Record<string, number>;
   } {
+    const mergedFailover =
+      override?.failoverModels ??
+      override?.candidateModels ??
+      this.globalPolicy.failoverModels ??
+      this.globalPolicy.candidateModels ??
+      [];
+    const mergedRetries =
+      override?.maxRetries ??
+      override?.maxRetriesPerModel ??
+      this.globalPolicy.maxRetries ??
+      this.globalPolicy.maxRetriesPerModel ??
+      DEFAULT_RESILIENCE_POLICY.maxRetries;
+
     return {
       ...DEFAULT_RESILIENCE_POLICY,
       ...this.globalPolicy,
       ...override,
-      failoverModels: override?.failoverModels ?? this.globalPolicy.failoverModels ?? [],
+      maxRetries: mergedRetries,
+      failoverModels: mergedFailover,
       failoverStatusCodes:
         override?.failoverStatusCodes ??
         this.globalPolicy.failoverStatusCodes ??
@@ -104,16 +243,24 @@ export class ResilienceExecutor {
 
   /**
    * Executes an operation across an ordered list of candidate models with
-   * per-model AbortController timeouts, retry backoff, automatic failover,
-   * and automatic secret scrubbing on thrown errors.
+   * per-model AbortController timeouts, caller AbortSignal propagation, retry backoff,
+   * automatic failover, and automatic secret scrubbing on thrown errors.
    */
   public async executeWithFailover<T>(options: {
     providerId: string;
     apiKey: string;
     candidates: string[];
     policy?: ResiliencePolicy;
+    externalSignal?: AbortSignal;
+    onEvent?: ByokEventListener;
     operation: (model: string, signal: AbortSignal, timeoutMs: number) => Promise<T>;
   }): Promise<T> {
+    if (options.externalSignal?.aborted) {
+      const abortErr = new Error('Generation aborted by caller');
+      abortErr.name = 'AbortError';
+      throw abortErr;
+    }
+
     const policy = this.getMergedPolicy(options.policy);
     const orderedModels = this.resolveCandidateModels(
       options.providerId,
@@ -139,12 +286,32 @@ export class ResilienceExecutor {
       const maxAttempts = Math.max(1, (policy.maxRetries ?? 0) + 1);
 
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        if (options.externalSignal?.aborted) {
+          const abortErr = new Error('Generation aborted by caller');
+          abortErr.name = 'AbortError';
+          throw abortErr;
+        }
+
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), modelTimeout);
+        let timedOut = false;
+        const timer = setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, modelTimeout);
+
+        const onExternalAbort = () => {
+          controller.abort();
+        };
+        if (options.externalSignal) {
+          options.externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+        }
 
         try {
           const result = await options.operation(model, controller.signal, modelTimeout);
           clearTimeout(timer);
+          if (options.externalSignal) {
+            options.externalSignal.removeEventListener('abort', onExternalAbort);
+          }
 
           this.failedModelsInSession.delete(`${options.providerId}:${model}`);
           if (policy.rememberWorkingModel) {
@@ -153,11 +320,22 @@ export class ResilienceExecutor {
           return result;
         } catch (err: unknown) {
           clearTimeout(timer);
-          const isAbort = err instanceof Error && err.name === 'AbortError';
+          if (options.externalSignal) {
+            options.externalSignal.removeEventListener('abort', onExternalAbort);
+          }
+
+          // If the caller explicitly aborted via request.signal, rethrow AbortError immediately without failing over
+          if (options.externalSignal?.aborted && !timedOut) {
+            const abortErr = new Error('Generation aborted by caller');
+            abortErr.name = 'AbortError';
+            throw abortErr;
+          }
+
+          const isAbort = timedOut || (err instanceof Error && err.name === 'AbortError');
 
           if (isAbort) {
             lastError = new Error(
-              `AI vision model (${model}) timed out after ${modelTimeout / 1000}s due to high server load.`
+              `AI model (${model}) timed out after ${modelTimeout / 1000}s due to high server load.`
             );
           } else if (err instanceof HttpStatusError) {
             lastError = new HttpStatusError(
@@ -187,6 +365,14 @@ export class ResilienceExecutor {
 
           // Retry on same model if attempts remain and no fallback candidates or transient error
           if (attempt < maxAttempts - 1 && isFailoverEligible && !hasMoreCandidates) {
+            options.onEvent?.({
+              type: 'retry',
+              providerId: options.providerId,
+              model,
+              attempt: attempt + 1,
+              statusCode: status,
+              message: lastError.message,
+            });
             const delay = policy.retryBackoffMs * Math.pow(2, attempt);
             await new Promise((r) => setTimeout(r, delay));
             continue;
@@ -194,6 +380,14 @@ export class ResilienceExecutor {
 
           // Break out of retry loop to fail over to next candidate model
           if (hasMoreCandidates && isFailoverEligible) {
+            options.onEvent?.({
+              type: 'model-failover',
+              providerId: options.providerId,
+              model,
+              nextModel: orderedModels[mIdx + 1],
+              statusCode: status,
+              message: lastError.message,
+            });
             break;
           }
 

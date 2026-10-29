@@ -1,9 +1,9 @@
-﻿/**
- * openbyok/core Type Definitions
+/**
+ * openbyok Core Type Definitions
  *
- * Defines interfaces for AI providers, multimodal requests, structured outputs,
- * streaming, per-model and cross-provider resilience policies, budget guards,
- * pluggable credential vaults, and localization.
+ * Defines interfaces for AI providers, single-turn and multi-turn multimodal requests,
+ * structured outputs, streaming, AbortSignal cancellation, per-model and cross-provider
+ * resilience policies, budget guards, pluggable credential vaults, and localization.
  */
 
 export type BuiltInProviderId = 'gemini' | 'openai' | 'claude' | 'ollama';
@@ -24,6 +24,21 @@ export interface MediaAttachment {
 }
 
 /**
+ * Role in a multi-turn conversation.
+ */
+export type ChatRole = 'system' | 'user' | 'assistant';
+
+/**
+ * Single message turn in a multi-turn conversation.
+ */
+export interface ChatMessage {
+  role: ChatRole;
+  content: string;
+  /** Optional multimodal images attached to this specific message turn */
+  images?: MediaAttachment[];
+}
+
+/**
  * Resilience, retry, timeout, and failover configuration per provider or model.
  */
 export interface ResiliencePolicy {
@@ -31,10 +46,14 @@ export interface ResiliencePolicy {
   timeoutMs?: number;
   /** Maximum retries on transient errors before failing over to next model (default: 1) */
   maxRetries?: number;
+  /** Alias for maxRetries */
+  maxRetriesPerModel?: number;
   /** Base delay in milliseconds for exponential backoff between retries (default: 800) */
   retryBackoffMs?: number;
   /** Ordered list of fallback model identifiers to try if primary model fails */
   failoverModels?: string[];
+  /** Alias for failoverModels */
+  candidateModels?: string[];
   /** HTTP status codes that trigger retry or model failover (default: [400, 404, 408, 429, 500, 502, 503, 504]) */
   failoverStatusCodes?: number[];
   /** Cache and prioritize the last working model for a given key during the session (default: true) */
@@ -76,6 +95,24 @@ export interface UsageMetrics {
 }
 
 /**
+ * Telemetry and lifecycle event emitted by ByokClient and ResilienceExecutor.
+ */
+export interface ByokLifecycleEvent {
+  type: 'retry' | 'model-failover' | 'provider-failover' | 'usage-recorded';
+  providerId: ProviderId;
+  model?: string;
+  nextModel?: string;
+  nextProviderId?: ProviderId;
+  attempt?: number;
+  statusCode?: number;
+  message?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+export type ByokEventListener = (event: ByokLifecycleEvent) => void;
+
+/**
  * Configuration passed to a provider during execution or connection testing.
  */
 export interface ProviderConfig {
@@ -91,17 +128,24 @@ export interface ProviderConfig {
   headers?: Record<string, string>;
   /** Optional resilience and failover policy override */
   resilience?: ResiliencePolicy;
+  /** Optional user-defined predicate to filter model IDs returned by listModels() */
+  modelFilter?: (modelId: string) => boolean;
+  /** Optional internal callback for emitting resilience telemetry events */
+  onEvent?: ByokEventListener;
 }
 
 /**
- * Generic multimodal AI generation request.
+ * Generic multimodal and multi-turn AI generation request.
+ * Supports either single-turn `userPrompt` or multi-turn `messages[]` (or both).
  */
 export interface GenerationRequest<TSchema = Record<string, unknown>> {
   /** System instructions defining role, rules, and output constraints */
   systemPrompt?: string;
-  /** User prompt text */
-  userPrompt: string;
-  /** Optional multimodal image attachments */
+  /** Single-turn user prompt text (optional if `messages` array is provided) */
+  userPrompt?: string;
+  /** Multi-turn conversation history (`user` / `assistant` / `system` turns with optional per-turn images) */
+  messages?: ChatMessage[];
+  /** Optional multimodal image attachments for the current user turn */
   images?: MediaAttachment[];
   /** Optional JSON schema object for structured JSON output enforcement */
   jsonSchema?: TSchema;
@@ -113,6 +157,8 @@ export interface GenerationRequest<TSchema = Record<string, unknown>> {
   maxTokens?: number;
   /** Target output language code */
   language?: SupportedLanguage;
+  /** Optional AbortSignal to cancel in-flight generation or streaming from UI (e.g. Stop button) */
+  signal?: AbortSignal;
 }
 
 /**
@@ -141,12 +187,12 @@ export interface AIProvider {
   readonly defaultModel: string;
 
   /**
-   * Generates raw text or markdown from text and optional images.
+   * Generates raw text or markdown from text/messages and optional images.
    */
   generateText(request: GenerationRequest, config: ProviderConfig): Promise<string>;
 
   /**
-   * Generates and parses a typed JSON object from text and optional images.
+   * Generates and parses a typed JSON object from text/messages and optional images.
    */
   generateObject<T = Record<string, unknown>>(
     request: GenerationRequest,
@@ -167,14 +213,13 @@ export interface AIProvider {
   testConnection(config: ProviderConfig): Promise<ConnectionTestResult>;
 
   /**
-   * Discovers available models for the configured credentials, if supported by the endpoint.
+   * Discovers available models for the configured credentials and endpoint.
    */
-  listModels?(config: ProviderConfig): Promise<string[]>;
+  listModels(config: ProviderConfig): Promise<string[]>;
 }
 
 /**
  * Pluggable credential storage adapter interface.
- * Implement this to add custom storage backends (IndexedDB, Passphrase Vault, POSIX File, etc.).
  */
 export interface VaultAdapter {
   /** Unique identifier for this vault mode (e.g. 'session', 'encrypted', 'passphrase', 'posix-file') */

@@ -16,9 +16,11 @@ Client-side and CLI AI applications need a secure, unified way to manage user-su
 `openbyok` provides:
 - **4 Vault Storage Tiers**: Volatile RAM (`session`), WebCrypto AES-GCM-256 (`encrypted`), PIN-Locked AES-GCM-256 with brute-force protection (`passphrase`), and POSIX `0600` owner-only CLI files (`posix-file`).
 - **Multi-Provider & OpenAI-Compatible Factory**: Built-in support for Google Gemini, OpenAI, Anthropic Claude, and local Ollama, plus 1-step registration for Groq, OpenRouter, DeepSeek, Mistral, Together AI, LM Studio, and vLLM.
-- **2-Level Automatic Failover**: Per-model retry/failover (`ResilienceExecutor`) AND cross-provider cascade (`fallbackProviders`) with session working-model memory.
-- **Universal Streaming (`generateStream`)**: Single `AsyncGenerator<string>` interface across Gemini SSE, OpenAI SSE, Claude SSE, and Ollama NDJSON.
-- **Session Cost & Request Budget Guard (`UsageTracker`)**: Real-time token/USD estimation and concurrency-safe `BudgetPolicy` limits (`BudgetExceededError`).
+- **2-Level Automatic Failover**: Per-model retry/failover (`ResilienceExecutor`) AND cross-provider cascade (`fallbackProviders`) with session working-model memory and aggregated failover error reporting (`[primary: ...] -> [fallback: ...]`).
+- **Universal Multimodal Streaming & Multi-Turn Chat (`generateStream`)**: Single `AsyncGenerator<string>` interface with full multimodal image attachments (`images`), multi-turn conversation history (`messages[]`), per-model failover, and native `AbortSignal` cancellation across Gemini SSE, OpenAI SSE, Claude SSE, and Ollama NDJSON.
+- **Unified Live Model Auto-Discovery (`listModels`)**: Automatically queries `/models` or `/api/tags` on every provider when a key is entered, populating `availableModels` in `ByokHeadlessController`, `useByok()`, and `<byok-settings>`, with optional user-defined `modelFilter` predicates.
+- **Session Cost, Real Token Usage & Budget Guard (`UsageTracker`)**: Tracks exact upstream API token usage (`usage` / `usageMetadata`) with character fallback, concurrency-safe `BudgetPolicy` limits (`BudgetExceededError`), and runtime policy updates via `client.setBudgetPolicy()`.
+- **Telemetry & State Hydration (`onEvent`, `hydrate`)**: Lifecycle hooks for `retry`, `model-failover`, `provider-failover`, and `usage-recorded`, plus 1-call `await client.hydrate()` to restore encrypted keys and selected provider/model preferences across page reloads.
 - **Drop-In UI & Framework Wrappers**: Themeable `<byok-settings>` Web Component, Headless Controller, Angular Signals (`openbyok/angular`), React Hooks (`openbyok/react`), and Vue 3 Composables (`openbyok/vue`).
 
 ---
@@ -63,14 +65,23 @@ const client = createByok({
 
 await client.vault.setKey('gemini', 'AIzaSy...');
 
-// Stream text chunks in real time
+// Auto-discover live available models for the configured key
+const models = await client.listModels('gemini');
+
+// Stream multi-turn chat chunks in real time with AbortSignal support
+const abortController = new AbortController();
 for await (const chunk of client.generateStream({
   systemPrompt: 'Be concise and factual.',
-  userPrompt: 'Explain authenticated AES-GCM-256 encryption.',
+  messages: [
+    { role: 'user', content: 'Explain authenticated AES-GCM-256 encryption.' },
+  ],
+  signal: abortController.signal,
 })) {
   process.stdout.write(chunk);
 }
 
+// Update session budget limits at runtime
+client.setBudgetPolicy({ maxRequestsPerSession: 100, maxCostUsdPerSession: 1.00 });
 console.log('Session metrics:', client.getUsageMetrics());
 ```
 
@@ -128,7 +139,7 @@ console.log('Active key:', redactApiKey(resolved));
 
 ## Security & Quality Assurance
 
-Run the built-in 18-test security, cryptographic penetration, chaos resilience, concurrency, and fuzzing suite:
+Run the built-in 30-test security, cryptographic penetration, chaos resilience, concurrency, fuzzing, and multi-turn streaming suite:
 
 ```bash
 npm test

@@ -1,9 +1,10 @@
-﻿/**
+/**
  * Google Gemini Provider
  *
  * Interacts directly with the Google Gemini REST API (v1beta).
  * Passes API keys strictly via the 'x-goog-api-key' header (never in URL query strings).
- * Includes dynamic vision model discovery, priority scoring, and ResilienceExecutor failover.
+ * Supports single-turn and multi-turn multimodal requests, resilient streaming,
+ * AbortSignal cancellation, and dynamic model discovery.
  */
 
 import {
@@ -12,7 +13,12 @@ import {
   GenerationRequest,
   ProviderConfig,
 } from '../types.js';
-import { HttpStatusError, ResilienceExecutor } from '../resilience.js';
+import {
+  HttpStatusError,
+  normalizeRequestMessages,
+  parseStructuredJson,
+  ResilienceExecutor,
+} from '../resilience.js';
 import { readStreamLines } from '../stream.util.js';
 
 export class GeminiProvider implements AIProvider {
@@ -29,6 +35,66 @@ export class GeminiProvider implements AIProvider {
     rememberWorkingModel: true,
   });
 
+  private buildRequestPayload(
+    request: GenerationRequest,
+    asJson: boolean
+  ): Record<string, unknown> {
+    const { systemInstruction, turns } = normalizeRequestMessages(request);
+
+    const contents = turns.map((turn) => {
+      const parts: Array<Record<string, unknown>> = [];
+      if (turn.content) {
+        parts.push({ text: turn.content });
+      }
+      if (turn.images && turn.images.length > 0) {
+        for (const img of turn.images) {
+          const cleanBase64 = img.data.replace(/^data:[a-zA-Z0-9/+-]+;base64,/, '');
+          parts.push({
+            inline_data: {
+              mime_type: img.mimeType || 'image/jpeg',
+              data: cleanBase64,
+            },
+          });
+        }
+      }
+      if (parts.length === 0) {
+        parts.push({ text: '' });
+      }
+      return {
+        role: turn.role === 'assistant' ? 'model' : 'user',
+        parts,
+      };
+    });
+
+    const generationConfig: Record<string, unknown> = {
+      temperature: request.temperature ?? 0.2,
+    };
+
+    if (request.maxTokens) {
+      generationConfig['maxOutputTokens'] = request.maxTokens;
+    }
+
+    if (asJson) {
+      generationConfig['response_mime_type'] = 'application/json';
+      if (request.jsonSchema) {
+        generationConfig['response_schema'] = request.jsonSchema;
+      }
+    }
+
+    const requestBody: Record<string, unknown> = {
+      contents,
+      generationConfig,
+    };
+
+    if (systemInstruction) {
+      requestBody['system_instruction'] = {
+        parts: [{ text: systemInstruction }],
+      };
+    }
+
+    return requestBody;
+  }
+
   public async generateText(
     request: GenerationRequest,
     config: ProviderConfig
@@ -41,11 +107,7 @@ export class GeminiProvider implements AIProvider {
     config: ProviderConfig
   ): Promise<T> {
     const rawJson = await this.executeGeneration(request, config, true);
-    const cleaned = rawJson
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```\s*$/i, '')
-      .trim();
-    return JSON.parse(cleaned) as T;
+    return parseStructuredJson<T>(rawJson);
   }
 
   public async *generateStream(
@@ -57,50 +119,50 @@ export class GeminiProvider implements AIProvider {
       throw new Error('Gemini API key is required. Please provide your API key.');
     }
 
+    const requestBody = this.buildRequestPayload(request, false);
     const baseUrl = (config.baseUrl || this.defaultBaseUrl).replace(/\/+$/, '');
-    const model = config.model?.trim() || (await this.getCandidateOrder(baseUrl, apiKey))[0] || this.defaultModel;
+    const primaryCandidates = config.model?.trim()
+      ? [config.model.trim()]
+      : await this.getCandidateOrder(baseUrl, apiKey);
 
-    const parts: Array<Record<string, unknown>> = [{ text: request.userPrompt }];
-    if (request.images && request.images.length > 0) {
-      for (const img of request.images) {
-        const cleanBase64 = img.data.replace(/^data:[a-zA-Z0-9/+-]+;base64,/, '');
-        parts.push({
-          inline_data: {
-            mime_type: img.mimeType || 'image/jpeg',
-            data: cleanBase64,
-          },
-        });
-      }
-    }
-
-    const requestBody: Record<string, unknown> = {
-      contents: [{ role: 'user', parts }],
-      generationConfig: {
-        temperature: request.temperature ?? 0.2,
-        ...(request.maxTokens ? { maxOutputTokens: request.maxTokens } : {}),
+    const res = await this.resilience.executeWithFailover({
+      providerId: this.id,
+      apiKey,
+      candidates: primaryCandidates,
+      externalSignal: request.signal,
+      onEvent: config.onEvent,
+      policy: {
+        ...config.resilience,
+        timeoutMs: config.timeoutMs ?? config.resilience?.timeoutMs ?? 25000,
       },
-    };
+      operation: async (model, signal) => {
+        const response = await fetch(
+          `${baseUrl}/models/${model}:streamGenerateContent?alt=sse`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-goog-api-key': apiKey,
+              ...config.headers,
+            },
+            body: JSON.stringify(requestBody),
+            signal,
+          }
+        );
 
-    if (request.systemPrompt) {
-      requestBody['system_instruction'] = { parts: [{ text: request.systemPrompt }] };
-    }
-
-    const res = await fetch(`${baseUrl}/models/${model}:streamGenerateContent?alt=sse`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
-        ...config.headers,
+        if (!response.ok) {
+          const errText = await response.text().catch(() => '');
+          throw new HttpStatusError(
+            `Gemini stream failed (${response.status}): ${errText}`,
+            response.status,
+            model
+          );
+        }
+        return response;
       },
-      body: JSON.stringify(requestBody),
     });
 
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      throw new HttpStatusError(`Gemini stream failed (${res.status}): ${errText}`, res.status, model);
-    }
-
-    for await (const line of readStreamLines(res.body)) {
+    for await (const line of readStreamLines(res.body, request.signal)) {
       if (!line.startsWith('data:')) continue;
       const jsonStr = line.slice(5).trim();
       if (!jsonStr || jsonStr === '[DONE]') continue;
@@ -124,46 +186,7 @@ export class GeminiProvider implements AIProvider {
       throw new Error('Gemini API key is required. Please provide your API key.');
     }
 
-    const parts: Array<Record<string, unknown>> = [{ text: request.userPrompt }];
-
-    if (request.images && request.images.length > 0) {
-      for (const img of request.images) {
-        const cleanBase64 = img.data.replace(/^data:[a-zA-Z0-9/+-]+;base64,/, '');
-        parts.push({
-          inline_data: {
-            mime_type: img.mimeType || 'image/jpeg',
-            data: cleanBase64,
-          },
-        });
-      }
-    }
-
-    const generationConfig: Record<string, unknown> = {
-      temperature: request.temperature ?? 0.2,
-    };
-
-    if (request.maxTokens) {
-      generationConfig['maxOutputTokens'] = request.maxTokens;
-    }
-
-    if (asJson) {
-      generationConfig['response_mime_type'] = 'application/json';
-      if (request.jsonSchema) {
-        generationConfig['response_schema'] = request.jsonSchema;
-      }
-    }
-
-    const requestBody: Record<string, unknown> = {
-      contents: [{ role: 'user', parts }],
-      generationConfig,
-    };
-
-    if (request.systemPrompt) {
-      requestBody['system_instruction'] = {
-        parts: [{ text: request.systemPrompt }],
-      };
-    }
-
+    const requestBody = this.buildRequestPayload(request, asJson);
     const baseUrl = (config.baseUrl || this.defaultBaseUrl).replace(/\/+$/, '');
     const primaryCandidates = config.model?.trim()
       ? [config.model.trim()]
@@ -173,6 +196,8 @@ export class GeminiProvider implements AIProvider {
       providerId: this.id,
       apiKey,
       candidates: primaryCandidates,
+      externalSignal: request.signal,
+      onEvent: config.onEvent,
       policy: {
         ...config.resilience,
         timeoutMs: config.timeoutMs ?? config.resilience?.timeoutMs ?? 25000,
@@ -211,6 +236,17 @@ export class GeminiProvider implements AIProvider {
         if (!rawText) {
           throw new Error(`No content returned from AI vision model (${model}).`);
         }
+
+        if (jsonResponse.usageMetadata) {
+          config.onEvent?.({
+            type: 'usage-recorded',
+            providerId: this.id,
+            model,
+            inputTokens: jsonResponse.usageMetadata.promptTokenCount,
+            outputTokens: jsonResponse.usageMetadata.candidatesTokenCount,
+          });
+        }
+
         return String(rawText);
       },
     });
@@ -266,7 +302,8 @@ export class GeminiProvider implements AIProvider {
 
   public async listModels(config: ProviderConfig): Promise<string[]> {
     const baseUrl = (config.baseUrl || this.defaultBaseUrl).replace(/\/+$/, '');
-    return this.discoverModelCandidates(baseUrl, (config.apiKey || '').trim());
+    const models = await this.discoverModelCandidates(baseUrl, (config.apiKey || '').trim());
+    return config.modelFilter ? models.filter(config.modelFilter) : models;
   }
 
   private isValidVisionModel(m: {
@@ -351,6 +388,9 @@ export class GeminiProvider implements AIProvider {
   }
 
   private async discoverModelCandidates(baseUrl: string, apiKey: string): Promise<string[]> {
+    if (!apiKey) {
+      return ['gemini-3.5-flash', 'gemini-flash-latest', 'gemini-1.5-flash'];
+    }
     const cached = this.cachedCandidatesByKey.get(apiKey);
     if (cached && cached.length > 0) return cached;
 
@@ -385,4 +425,3 @@ export class GeminiProvider implements AIProvider {
     return ordered.slice(0, 6);
   }
 }
-

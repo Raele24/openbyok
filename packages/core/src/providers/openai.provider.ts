@@ -1,8 +1,10 @@
-﻿/**
+/**
  * OpenAI & OpenAI-Compatible Provider
  *
  * Supports OpenAI Platform as well as any OpenAI-compatible Chat Completions endpoint
  * (Groq, OpenRouter, DeepSeek, Mistral, Together AI, LM Studio, vLLM) via createOpenAICompatibleProvider().
+ * Supports single-turn and multi-turn multimodal requests, resilient streaming with model failover,
+ * AbortSignal cancellation, and dynamic model discovery via listModels().
  */
 
 import {
@@ -11,7 +13,12 @@ import {
   GenerationRequest,
   ProviderConfig,
 } from '../types.js';
-import { HttpStatusError, ResilienceExecutor } from '../resilience.js';
+import {
+  HttpStatusError,
+  normalizeRequestMessages,
+  parseStructuredJson,
+  ResilienceExecutor,
+} from '../resilience.js';
 import { readStreamLines } from '../stream.util.js';
 
 export interface OpenAICompatibleOptions {
@@ -22,6 +29,8 @@ export interface OpenAICompatibleOptions {
   fallbackModels?: string[];
   requiresKey?: boolean;
   defaultHeaders?: Record<string, string>;
+  /** Optional default predicate to filter model IDs returned by listModels() */
+  modelFilter?: (modelId: string) => boolean;
 }
 
 export class OpenAIProvider implements AIProvider {
@@ -34,6 +43,8 @@ export class OpenAIProvider implements AIProvider {
   public readonly defaultModel: string;
   private readonly fallbackModels: string[];
   private readonly defaultHeaders: Record<string, string>;
+  private readonly defaultModelFilter?: (modelId: string) => boolean;
+  private cachedModelsByKey = new Map<string, string[]>();
   private resilience = new ResilienceExecutor({
     timeoutMs: 60000,
     maxRetries: 1,
@@ -48,6 +59,60 @@ export class OpenAIProvider implements AIProvider {
     this.defaultModel = options?.defaultModel || OpenAIProvider.DEFAULT_MODEL;
     this.fallbackModels = options?.fallbackModels || ['gpt-4o'];
     this.defaultHeaders = options?.defaultHeaders || {};
+    this.defaultModelFilter = options?.modelFilter;
+  }
+
+  /**
+   * Builds normalized OpenAI chat completion messages supporting both single-turn
+   * and multi-turn requests with multimodal base64 image attachments.
+   */
+  private buildMessages(request: GenerationRequest): Array<Record<string, unknown>> {
+    const { systemInstruction, turns } = normalizeRequestMessages(request);
+    const messages: Array<Record<string, unknown>> = [];
+
+    if (systemInstruction) {
+      messages.push({ role: 'system', content: systemInstruction });
+    }
+
+    for (const turn of turns) {
+      if (turn.role === 'assistant') {
+        messages.push({ role: 'assistant', content: turn.content });
+        continue;
+      }
+
+      if (turn.images && turn.images.length > 0) {
+        const contentArray: Array<Record<string, unknown>> = [];
+        if (turn.content) {
+          contentArray.push({ type: 'text', text: turn.content });
+        }
+        for (const img of turn.images) {
+          const cleanBase64 = img.data.replace(/^data:[a-zA-Z0-9/+-]+;base64,/, '');
+          const mimeType = img.mimeType || 'image/jpeg';
+          contentArray.push({
+            type: 'image_url',
+            image_url: {
+              url: `data:${mimeType};base64,${cleanBase64}`,
+              detail: 'high',
+            },
+          });
+        }
+        messages.push({ role: 'user', content: contentArray });
+      } else {
+        messages.push({ role: 'user', content: turn.content });
+      }
+    }
+
+    return messages;
+  }
+
+  private getCandidateModels(config: ProviderConfig): string[] {
+    const discovered = this.cachedModelsByKey.get((config.apiKey || '').trim()) || [];
+    return [
+      config.model?.trim(),
+      this.defaultModel,
+      ...this.fallbackModels,
+      ...discovered.slice(0, 4),
+    ].filter((m, idx, arr): m is string => Boolean(m) && arr.indexOf(m) === idx);
   }
 
   public async generateText(
@@ -62,11 +127,7 @@ export class OpenAIProvider implements AIProvider {
     config: ProviderConfig
   ): Promise<T> {
     const rawText = await this.executeGeneration(request, config, true);
-    const cleaned = rawText
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```\s*$/i, '')
-      .trim();
-    return JSON.parse(cleaned) as T;
+    return parseStructuredJson<T>(rawText);
   }
 
   public async *generateStream(
@@ -79,13 +140,8 @@ export class OpenAIProvider implements AIProvider {
     }
 
     const baseUrl = (config.baseUrl || this.defaultBaseUrl).replace(/\/+$/, '');
-    const model = config.model?.trim() || this.defaultModel;
-
-    const messages: Array<Record<string, unknown>> = [];
-    if (request.systemPrompt) {
-      messages.push({ role: 'system', content: request.systemPrompt });
-    }
-    messages.push({ role: 'user', content: request.userPrompt });
+    const messages = this.buildMessages(request);
+    const candidateModels = this.getCandidateModels(config);
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -96,24 +152,43 @@ export class OpenAIProvider implements AIProvider {
       headers['Authorization'] = `Bearer ${apiKey}`;
     }
 
-    const res = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: request.temperature ?? 0.2,
-        max_tokens: request.maxTokens ?? 2048,
-        stream: true,
-      }),
+    const res = await this.resilience.executeWithFailover({
+      providerId: this.id,
+      apiKey,
+      candidates: candidateModels,
+      externalSignal: request.signal,
+      onEvent: config.onEvent,
+      policy: {
+        ...config.resilience,
+        timeoutMs: config.timeoutMs ?? config.resilience?.timeoutMs ?? 60000,
+      },
+      operation: async (model, signal) => {
+        const response = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            model,
+            messages,
+            temperature: request.temperature ?? 0.2,
+            max_tokens: request.maxTokens ?? 2048,
+            stream: true,
+          }),
+          signal,
+        });
+
+        if (!response.ok) {
+          const errText = await response.text().catch(() => '');
+          throw new HttpStatusError(
+            `${this.name} stream failed (${response.status}): ${errText}`,
+            response.status,
+            model
+          );
+        }
+        return response;
+      },
     });
 
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      throw new HttpStatusError(`${this.name} stream failed (${res.status}): ${errText}`, res.status, model);
-    }
-
-    for await (const line of readStreamLines(res.body)) {
+    for await (const line of readStreamLines(res.body, request.signal)) {
       if (!line.startsWith('data:')) continue;
       const payload = line.slice(5).trim();
       if (!payload || payload === '[DONE]') break;
@@ -137,46 +212,16 @@ export class OpenAIProvider implements AIProvider {
       throw new Error(`${this.name} API key is required. Please provide your API key.`);
     }
 
-    const userContent: Array<Record<string, unknown>> = [
-      { type: 'text', text: request.userPrompt },
-    ];
-
-    if (request.images && request.images.length > 0) {
-      for (const img of request.images) {
-        const cleanBase64 = img.data.replace(/^data:[a-zA-Z0-9/+-]+;base64,/, '');
-        const mimeType = img.mimeType || 'image/jpeg';
-        userContent.push({
-          type: 'image_url',
-          image_url: {
-            url: `data:${mimeType};base64,${cleanBase64}`,
-            detail: 'high',
-          },
-        });
-      }
-    }
-
-    const systemContent = [request.systemPrompt, request.schemaInstruction]
-      .filter(Boolean)
-      .join('\n\n');
-
-    const messages: Array<Record<string, unknown>> = [];
-    if (systemContent) {
-      messages.push({ role: 'system', content: systemContent });
-    }
-    messages.push({ role: 'user', content: userContent });
-
-    const candidateModels = [
-      config.model?.trim(),
-      this.defaultModel,
-      ...this.fallbackModels,
-    ].filter((m, idx, arr): m is string => Boolean(m) && arr.indexOf(m) === idx);
-
+    const messages = this.buildMessages(request);
+    const candidateModels = this.getCandidateModels(config);
     const baseUrl = (config.baseUrl || this.defaultBaseUrl).replace(/\/+$/, '');
 
     return this.resilience.executeWithFailover({
       providerId: this.id,
       apiKey,
       candidates: candidateModels,
+      externalSignal: request.signal,
+      onEvent: config.onEvent,
       policy: {
         ...config.resilience,
         timeoutMs: config.timeoutMs ?? config.resilience?.timeoutMs ?? 60000,
@@ -228,9 +273,60 @@ export class OpenAIProvider implements AIProvider {
         if (!rawText) {
           throw new Error(`No content returned from ${this.name} model (${model}).`);
         }
+
+        if (jsonResponse.usage) {
+          config.onEvent?.({
+            type: 'usage-recorded',
+            providerId: this.id,
+            model,
+            inputTokens: jsonResponse.usage.prompt_tokens,
+            outputTokens: jsonResponse.usage.completion_tokens,
+          });
+        }
+
         return String(rawText);
       },
     });
+  }
+
+  public async listModels(config: ProviderConfig): Promise<string[]> {
+    const apiKey = (config.apiKey || '').trim();
+    const filterFn = config.modelFilter || this.defaultModelFilter;
+    const defaults = [this.defaultModel, ...this.fallbackModels];
+    if (this.requiresKey && !apiKey) {
+      return filterFn ? defaults.filter(filterFn) : defaults;
+    }
+
+    const baseUrl = (config.baseUrl || this.defaultBaseUrl).replace(/\/+$/, '');
+    const headers: Record<string, string> = {
+      ...this.defaultHeaders,
+      ...config.headers,
+    };
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+
+    try {
+      const res = await fetch(`${baseUrl}/models`, {
+        method: 'GET',
+        headers,
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        let models: string[] = (data.data || [])
+          .map((m: { id?: string }) => m.id || '')
+          .filter(Boolean);
+        if (filterFn) {
+          models = models.filter(filterFn);
+        }
+        if (models.length > 0) {
+          this.cachedModelsByKey.set(apiKey, models);
+          return models;
+        }
+      }
+    } catch { }
+
+    return filterFn ? defaults.filter(filterFn) : defaults;
   }
 
   public async testConnection(config: ProviderConfig): Promise<ConnectionTestResult> {
@@ -265,7 +361,7 @@ export class OpenAIProvider implements AIProvider {
           message: hasVision
             ? 'Connected successfully. Vision models available.'
             : 'Connected successfully.',
-          availableModels: models,
+          availableModels: models.length > 0 ? models : [this.defaultModel, ...this.fallbackModels],
         };
       }
 
@@ -285,4 +381,3 @@ export class OpenAIProvider implements AIProvider {
 export function createOpenAICompatibleProvider(options: OpenAICompatibleOptions): AIProvider {
   return new OpenAIProvider(options);
 }
-

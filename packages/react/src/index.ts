@@ -1,11 +1,17 @@
-﻿/**
- * openbyok/react â€” React Hooks Adapter for openbyok/core & openbyok/ui
+/**
+ * openbyok/react — React Hooks Adapter for openbyok/core & openbyok/ui
  *
  * Accepts standard React hook primitives (`useState`, `useEffect`) so it works
  * across React 17, 18, 19, Next.js, and Remix without peer-dependency version conflicts.
  */
 
-import { ByokClient, ByokClientOptions, ProviderId } from '../../core/src/index.js';
+import {
+  BudgetPolicy,
+  ByokClient,
+  ByokClientOptions,
+  ByokEventListener,
+  ProviderId,
+} from '../../core/src/index.js';
 import { ByokHeadlessController, ByokUiState } from '../../ui/src/index.js';
 
 export interface ReactPrimitives {
@@ -49,6 +55,14 @@ export function createByokReactHook(
         sharedController.setCustomEndpoint(url, providerId),
       setCustomModel: (model: string, providerId?: ProviderId) =>
         sharedController.setCustomModel(model, providerId),
+      refreshModels: (providerId?: ProviderId) =>
+        sharedController.refreshModels(providerId),
+      listModels: (providerId?: ProviderId) =>
+        sharedClient.listModels(providerId),
+      hydrate: () => sharedController.hydrate(),
+      onEvent: (listener: ByokEventListener) => sharedClient.onEvent(listener),
+      setBudgetPolicy: (policy: BudgetPolicy) =>
+        sharedController.setBudgetPolicy(policy),
       testConnection: () => sharedController.testActiveConnection(),
       purgeAll: () => sharedController.purgeAllCredentials(),
       unlockPassphraseVault: (pin: string) =>
@@ -58,4 +72,3 @@ export function createByokReactHook(
     };
   };
 }
-

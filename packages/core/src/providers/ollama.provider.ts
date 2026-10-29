@@ -1,8 +1,9 @@
-﻿/**
+/**
  * Ollama Local AI Provider
  *
  * Implements the AIProvider interface for locally hosted Ollama instances
- * with multimodal vision support and optional Bearer token authentication.
+ * with single-turn and multi-turn multimodal vision support, resilient streaming,
+ * AbortSignal cancellation, dynamic model discovery via listModels(), and optional Bearer authentication.
  */
 
 import {
@@ -11,7 +12,12 @@ import {
   GenerationRequest,
   ProviderConfig,
 } from '../types.js';
-import { HttpStatusError, ResilienceExecutor } from '../resilience.js';
+import {
+  HttpStatusError,
+  normalizeRequestMessages,
+  parseStructuredJson,
+  ResilienceExecutor,
+} from '../resilience.js';
 import { readStreamLines } from '../stream.util.js';
 
 export class OllamaProvider implements AIProvider {
@@ -24,11 +30,42 @@ export class OllamaProvider implements AIProvider {
   public readonly defaultBaseUrl = OllamaProvider.DEFAULT_ENDPOINT;
   public readonly defaultModel = OllamaProvider.DEFAULT_MODEL;
 
+  private cachedModels: string[] = [];
   private resilience = new ResilienceExecutor({
     timeoutMs: 90000,
     maxRetries: 0,
     rememberWorkingModel: false,
   });
+
+  private buildMessages(request: GenerationRequest): Array<Record<string, unknown>> {
+    const { systemInstruction, turns } = normalizeRequestMessages(request);
+    const messages: Array<Record<string, unknown>> = [];
+
+    if (systemInstruction) {
+      messages.push({ role: 'system', content: systemInstruction });
+    }
+
+    for (const turn of turns) {
+      const base64Images = (turn.images || []).map((img) =>
+        img.data.replace(/^data:[a-zA-Z0-9/+-]+;base64,/, '')
+      );
+      messages.push({
+        role: turn.role,
+        content: turn.content,
+        ...(base64Images.length > 0 ? { images: base64Images } : {}),
+      });
+    }
+
+    return messages;
+  }
+
+  private getCandidateModels(config: ProviderConfig): string[] {
+    return [
+      config.model?.trim() || OllamaProvider.DEFAULT_MODEL,
+      ...(config.resilience?.failoverModels || []),
+      ...this.cachedModels.slice(0, 4),
+    ].filter((m, idx, arr): m is string => Boolean(m) && arr.indexOf(m) === idx);
+  }
 
   public async generateText(
     request: GenerationRequest,
@@ -42,24 +79,7 @@ export class OllamaProvider implements AIProvider {
     config: ProviderConfig
   ): Promise<T> {
     const rawText = await this.executeGeneration(request, config, true);
-    let clean = rawText.trim();
-    if (clean.startsWith('```json')) {
-      clean = clean.replace(/^```json\s*/i, '').replace(/\s*```$/, '');
-    } else if (clean.startsWith('```')) {
-      clean = clean.replace(/^```\s*/, '').replace(/\s*```$/, '');
-    }
-
-    const firstBrace = clean.indexOf('{');
-    const lastBrace = clean.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      clean = clean.slice(firstBrace, lastBrace + 1);
-    }
-
-    try {
-      return JSON.parse(clean) as T;
-    } catch {
-      throw new Error(`Failed to parse JSON output from Ollama: ${rawText.slice(0, 150)}...`);
-    }
+    return parseStructuredJson<T>(rawText);
   }
 
   public async *generateStream(
@@ -67,7 +87,8 @@ export class OllamaProvider implements AIProvider {
     config: ProviderConfig
   ): AsyncGenerator<string, void, unknown> {
     const endpoint = (config.baseUrl || OllamaProvider.DEFAULT_ENDPOINT).trim().replace(/\/+$/, '');
-    const model = config.model?.trim() || OllamaProvider.DEFAULT_MODEL;
+    const candidateModels = this.getCandidateModels(config);
+    const messages = this.buildMessages(request);
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -77,29 +98,50 @@ export class OllamaProvider implements AIProvider {
       headers['Authorization'] = `Bearer ${config.apiKey.trim()}`;
     }
 
-    const messages: Array<Record<string, unknown>> = [];
-    if (request.systemPrompt) {
-      messages.push({ role: 'system', content: request.systemPrompt });
-    }
-    messages.push({ role: 'user', content: request.userPrompt });
+    const res = await this.resilience.executeWithFailover({
+      providerId: this.id,
+      apiKey: config.apiKey || 'local',
+      candidates: candidateModels,
+      externalSignal: request.signal,
+      onEvent: config.onEvent,
+      policy: {
+        ...config.resilience,
+        timeoutMs: config.timeoutMs ?? config.resilience?.timeoutMs ?? 90000,
+      },
+      operation: async (model, signal) => {
+        let response: Response;
+        try {
+          response = await fetch(`${endpoint}/api/chat`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              model,
+              messages,
+              stream: true,
+              options: { temperature: request.temperature ?? 0.2 },
+            }),
+            signal,
+          });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          throw new Error(
+            `Failed to connect to Ollama at ${endpoint}. Please verify that Ollama is running ('ollama serve'). Error: ${msg}`
+          );
+        }
 
-    const res = await fetch(`${endpoint}/api/chat`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages,
-        stream: true,
-        options: { temperature: request.temperature ?? 0.2 },
-      }),
+        if (!response.ok) {
+          const errText = await response.text().catch(() => '');
+          throw new HttpStatusError(
+            `Ollama stream failed (${response.status}): ${errText}`,
+            response.status,
+            model
+          );
+        }
+        return response;
+      },
     });
 
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      throw new HttpStatusError(`Ollama stream failed (${res.status}): ${errText}`, res.status, model);
-    }
-
-    for await (const line of readStreamLines(res.body)) {
+    for await (const line of readStreamLines(res.body, request.signal)) {
       try {
         const parsed = JSON.parse(line);
         const text = parsed.message?.content || parsed.response;
@@ -116,17 +158,8 @@ export class OllamaProvider implements AIProvider {
     asJson: boolean
   ): Promise<string> {
     const endpoint = (config.baseUrl || OllamaProvider.DEFAULT_ENDPOINT).trim().replace(/\/+$/, '');
-    const candidateModels = [
-      config.model?.trim() || OllamaProvider.DEFAULT_MODEL,
-      ...(config.resilience?.failoverModels || []),
-    ];
-
-    const base64Images: string[] = [];
-    if (request.images && request.images.length > 0) {
-      for (const img of request.images) {
-        base64Images.push(img.data.replace(/^data:[a-zA-Z0-9/+-]+;base64,/, ''));
-      }
-    }
+    const candidateModels = this.getCandidateModels(config);
+    const messages = this.buildMessages(request);
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -140,21 +173,13 @@ export class OllamaProvider implements AIProvider {
       providerId: this.id,
       apiKey: config.apiKey || 'local',
       candidates: candidateModels,
+      externalSignal: request.signal,
+      onEvent: config.onEvent,
       policy: {
         ...config.resilience,
         timeoutMs: config.timeoutMs ?? config.resilience?.timeoutMs ?? 90000,
       },
       operation: async (model, signal) => {
-        const messages: Array<Record<string, unknown>> = [];
-        if (request.systemPrompt) {
-          messages.push({ role: 'system', content: request.systemPrompt });
-        }
-        messages.push({
-          role: 'user',
-          content: request.userPrompt,
-          ...(base64Images.length > 0 ? { images: base64Images } : {}),
-        });
-
         const requestBody: Record<string, unknown> = {
           model,
           messages,
@@ -199,14 +224,60 @@ export class OllamaProvider implements AIProvider {
         const resData = (await response.json()) as {
           message?: { content?: string };
           response?: string;
+          prompt_eval_count?: number;
+          eval_count?: number;
         };
         const rawJsonText = resData.message?.content || resData.response || '';
         if (!rawJsonText.trim()) {
           throw new Error('Ollama returned an empty response. Please check model logs.');
         }
+
+        if (resData.prompt_eval_count || resData.eval_count) {
+          config.onEvent?.({
+            type: 'usage-recorded',
+            providerId: this.id,
+            model,
+            inputTokens: resData.prompt_eval_count,
+            outputTokens: resData.eval_count,
+          });
+        }
+
         return rawJsonText;
       },
     });
+  }
+
+  public async listModels(config: ProviderConfig): Promise<string[]> {
+    const endpoint = (config.baseUrl || OllamaProvider.DEFAULT_ENDPOINT).trim().replace(/\/+$/, '');
+    const headers: Record<string, string> = { ...config.headers };
+    if (config.apiKey && config.apiKey.trim()) {
+      headers['Authorization'] = `Bearer ${config.apiKey.trim()}`;
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const response = await fetch(`${endpoint}/api/tags`, {
+        method: 'GET',
+        headers,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        const data = (await response.json()) as { models?: Array<{ name: string }> };
+        let names = (data.models || []).map((m) => m.name).filter(Boolean);
+        if (config.modelFilter) {
+          names = names.filter(config.modelFilter);
+        }
+        if (names.length > 0) {
+          this.cachedModels = names;
+          return names;
+        }
+      }
+    } catch { }
+
+    return [];
   }
 
   public async testConnection(config: ProviderConfig): Promise<ConnectionTestResult> {
@@ -278,4 +349,3 @@ export class OllamaProvider implements AIProvider {
     }
   }
 }
-
